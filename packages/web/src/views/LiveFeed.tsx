@@ -48,9 +48,13 @@ function formatPayload(event: WsEvent): string {
     case 'budget.exhausted':
       return `${p.provider ?? ''} — ${p.message ?? ''}`;
     case 'llm.request.start':
-      return `${p.provider ?? ''} ${p.model ?? ''}`;
-    case 'llm.request.complete':
-      return `${p.provider ?? ''} ${p.model ?? ''} (${p.tokensUsed ?? '?'} tokens)`;
+      return `${p.task ?? 'request'} via ${p.provider ?? 'unknown'}`;
+    case 'llm.request.complete': {
+      const u = (p.usage ?? {}) as Record<string, number>;
+      const tokens = (u.inputTokens ?? 0) + (u.outputTokens ?? 0);
+      const cost = u.estimatedCostUsd ? ` · ${u.estimatedCostUsd.toFixed(4)}` : '';
+      return `${p.task ?? 'request'} · ${p.model ?? p.provider ?? ''} · ${tokens} tokens${cost} · ${p.latencyMs ?? '?'}ms`;
+    }
     default:
       return JSON.stringify(p);
   }

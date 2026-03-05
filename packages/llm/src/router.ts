@@ -392,6 +392,9 @@ export class Router {
       type: 'llm.request.complete',
       payload: {
         requestId,
+        task: request.task,
+        provider: providerName,
+        model: result.model,
         usage: {
           inputTokens: result.inputTokens,
           outputTokens: result.outputTokens,
@@ -542,6 +545,9 @@ export class Router {
       type: 'llm.request.complete',
       payload: {
         requestId,
+        task: request.task,
+        provider: providerName,
+        model: tokens.model,
         usage: {
           inputTokens: tokens.inputTokens,
           outputTokens: tokens.outputTokens,
