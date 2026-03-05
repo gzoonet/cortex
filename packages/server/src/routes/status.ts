@@ -6,10 +6,14 @@ import { fileURLToPath } from 'node:url';
 
 let _version = 'unknown';
 try {
-  // Walk up from dist/routes/ to find package.json
-  const here = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url));
-  const pkg = JSON.parse(readFileSync(resolve(here, '..', '..', '..', '..', 'package.json'), 'utf-8'));
-  _version = pkg.version ?? 'unknown';
+  let dir = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i++) {
+    try {
+      const pkg = JSON.parse(readFileSync(resolve(dir, 'package.json'), 'utf-8'));
+      if (pkg.name === 'gzoo-cortex' && pkg.version) { _version = pkg.version; break; }
+    } catch { /* not here */ }
+    dir = resolve(dir, '..');
+  }
 } catch { /* ignore */ }
 
 export function createStatusRoutes(bundle: ServerBundle): Router {
