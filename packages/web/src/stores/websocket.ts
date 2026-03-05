@@ -22,6 +22,7 @@ interface WebSocketState {
   connect: () => void;
   disconnect: () => void;
   clearEvents: () => void;
+  setInitialCounters: (c: WebSocketState["counters"]) => void;
 }
 
 let ws: WebSocket | null = null;
@@ -113,5 +114,9 @@ export const useWebSocketStore = create<WebSocketState>((set, get) => ({
 
   clearEvents: () => {
     set({ events: [], counters: { entities: 0, relationships: 0, files: 0, contradictions: 0 } });
+  },
+
+  setInitialCounters: (c) => {
+    set({ counters: c });
   },
 }));

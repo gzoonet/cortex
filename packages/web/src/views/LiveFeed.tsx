@@ -13,6 +13,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useWebSocketStore, type WsEvent } from '../stores/websocket';
+import { api } from '../stores/api';
 
 const EVENT_CONFIG: Record<string, { icon: typeof Network; color: string; label: string }> = {
   'entity.created': { icon: Network, color: 'text-sky-400', label: 'Entity Created' },
@@ -96,14 +97,26 @@ function CounterCard({
 }
 
 export function LiveFeed() {
-  const { connected, events, counters, connect, disconnect, clearEvents } = useWebSocketStore();
+  const { connected, events, counters, connect, disconnect, clearEvents, setInitialCounters } = useWebSocketStore();
   const [paused, setPaused] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // Load existing DB stats as initial counters
+    api.getStatus()
+      .then((res) => {
+        const g = res.data.graph;
+        setInitialCounters({
+          entities: g.entityCount,
+          relationships: g.relationshipCount,
+          files: g.fileCount,
+          contradictions: g.contradictionCount,
+        });
+      })
+      .catch(() => {});
     connect();
     return () => disconnect();
-  }, [connect, disconnect]);
+  }, [connect, disconnect, setInitialCounters]);
 
   // Auto-scroll to top when new events arrive (unless paused)
   useEffect(() => {
@@ -162,8 +175,10 @@ export function LiveFeed() {
           <Radio className="h-12 w-12 text-zinc-700" />
           <p className="text-sm">Waiting for events...</p>
           <p className="text-xs text-zinc-600">
-            Run <code className="rounded bg-zinc-800 px-1.5 py-0.5">cortex watch</code> or modify
-            a watched file to start ingestion
+            Modify a watched file to see live events here.
+          </p>
+          <p className="text-xs text-zinc-600">
+            The server watches registered projects automatically.
           </p>
         </div>
       ) : (

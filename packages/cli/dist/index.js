@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-
 import { Command } from 'commander';
 import { registerInitCommand } from './commands/init.js';
 import { registerWatchCommand } from './commands/watch.js';
@@ -18,27 +17,16 @@ import { registerMcpCommand } from './commands/mcp.js';
 import { registerDbCommand } from './commands/db.js';
 import { registerReportCommand } from './commands/report.js';
 import { registerServeCommand } from './commands/serve.js';
-
 const program = new Command();
-
 program
-  .name('cortex')
-  .description('Local-first knowledge orchestrator — remembers what you decided, why, and where.')
-  .version('0.2.7')
-  .option('--config <path>', 'Config file path')
-  .option('--verbose', 'Show debug-level output', false)
-  .option('--quiet', 'Suppress all non-error output', false)
-  .option('--json', 'Output as JSON (for scripting)', false)
-  .option('--no-color', 'Disable color output');
-
-export interface GlobalOptions {
-  config?: string;
-  verbose: boolean;
-  quiet: boolean;
-  json: boolean;
-  color: boolean;
-}
-
+    .name('cortex')
+    .description('Local-first knowledge orchestrator — remembers what you decided, why, and where.')
+    .version('0.2.7')
+    .option('--config <path>', 'Config file path')
+    .option('--verbose', 'Show debug-level output', false)
+    .option('--quiet', 'Suppress all non-error output', false)
+    .option('--json', 'Output as JSON (for scripting)', false)
+    .option('--no-color', 'Disable color output');
 registerInitCommand(program);
 registerWatchCommand(program);
 registerQueryCommand(program);
@@ -57,5 +45,5 @@ registerMcpCommand(program);
 registerDbCommand(program);
 registerReportCommand(program);
 registerServeCommand(program);
-
 program.parse(process.argv);
+//# sourceMappingURL=index.js.map
