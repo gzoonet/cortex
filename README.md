@@ -39,7 +39,7 @@ and gives it back to you when you need it.
 ### Install
 
 ```bash
-npm install -g @gzoo/cortex
+npm install -g gzoo-cortex
 ```
 
 ### Setup
