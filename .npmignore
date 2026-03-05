@@ -1,0 +1,22 @@
+# Launch content (not part of the package)
+launch-content/
+social-preview.*
+
+# Development files
+tests/
+docs/
+.github/
+.claude/
+.env
+.env.example
+
+# Build artifacts
+*.tsbuildinfo
+
+# IDE/OS
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+.DS_Store
