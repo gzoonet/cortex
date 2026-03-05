@@ -7,7 +7,7 @@ import { registerQueryCommand } from './commands/query.js';
 import { registerFindCommand } from './commands/find.js';
 import { registerStatusCommand } from './commands/status.js';
 import { registerCostsCommand } from './commands/costs.js';
-import { registerConfigCommand } from './commands/config.js';
+import { registerConfigCommand, registerExcludeCommand } from './commands/config.js';
 import { registerPrivacyCommand } from './commands/privacy.js';
 import { registerContradictionsCommand } from './commands/contradictions.js';
 import { registerResolveCommand } from './commands/resolve.js';
@@ -24,7 +24,7 @@ const program = new Command();
 program
   .name('cortex')
   .description('Local-first knowledge orchestrator — remembers what you decided, why, and where.')
-  .version('0.2.1')
+  .version('0.2.2')
   .option('--config <path>', 'Config file path')
   .option('--verbose', 'Show debug-level output', false)
   .option('--quiet', 'Suppress all non-error output', false)
@@ -46,6 +46,7 @@ registerFindCommand(program);
 registerStatusCommand(program);
 registerCostsCommand(program);
 registerConfigCommand(program);
+registerExcludeCommand(program);
 registerPrivacyCommand(program);
 registerContradictionsCommand(program);
 registerResolveCommand(program);

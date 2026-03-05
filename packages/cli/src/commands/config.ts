@@ -11,7 +11,7 @@ const logger = createLogger('cli:config');
 export function registerConfigCommand(program: Command): void {
   const configCmd = program
     .command('config')
-    .description('Read/write/validate configuration');
+    .description('Read/write/validate configuration (includes exclude subcommand)');
 
   configCmd
     .command('get <key>')
@@ -56,7 +56,7 @@ export function registerConfigCommand(program: Command): void {
   // ── exclude subcommands ────────────────────────────────────────────────────
   const excludeCmd = configCmd
     .command('exclude')
-    .description('Manage ingest.exclude patterns');
+    .description('Manage which files and directories are ignored during watching');
 
   excludeCmd
     .command('list')
@@ -409,6 +409,37 @@ async function runExcludeRemove(pattern: string, globals: GlobalOptions): Promis
   }
 }
 
+
+
+export function registerExcludeCommand(program: Command): void {
+  const excludeCmd = program
+    .command('exclude')
+    .description('Manage which files and directories are ignored during watching');
+
+  excludeCmd
+    .command('add <pattern>')
+    .description('Add an exclude pattern (directory name, file name, or glob like *.log)')
+    .action(async (pattern: string) => {
+      const globals = program.opts<GlobalOptions>();
+      await runExcludeAdd(pattern, globals);
+    });
+
+  excludeCmd
+    .command('remove <pattern>')
+    .description('Remove an exclude pattern')
+    .action(async (pattern: string) => {
+      const globals = program.opts<GlobalOptions>();
+      await runExcludeRemove(pattern, globals);
+    });
+
+  excludeCmd
+    .command('list')
+    .description('Show all exclude patterns')
+    .action(async () => {
+      const globals = program.opts<GlobalOptions>();
+      await runExcludeList(globals);
+    });
+}
 function flattenObject(
   obj: Record<string, unknown>,
   prefix = '',
