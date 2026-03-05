@@ -58,7 +58,11 @@ export function registerRestartCommand(program: Command): void {
         process.kill(pid, 'SIGTERM');
         console.log(`Stopped Cortex (PID ${pid}).`);
         try { unlinkSync(PID_FILE); } catch { /* ok */ }
-        await new Promise(r => setTimeout(r, 1000));
+        // Wait for process to fully exit and release port
+      for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        if (!isRunning(pid)) break;
+      }
       }
       console.log('Starting Cortex...');
       const serveCmd = program.commands.find(c => c.name() === 'serve');
