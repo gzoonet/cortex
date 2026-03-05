@@ -4964,6 +4964,7 @@ function createStatusRoutes(bundle) {
       res.json({
         success: true,
         data: {
+          version: _version,
           graph: {
             entityCount: stats.entityCount,
             relationshipCount: stats.relationshipCount,
@@ -5010,9 +5011,18 @@ var init_status = __esm({
     "use strict";
     _version = "unknown";
     try {
-      const here = typeof __dirname !== "undefined" ? __dirname : dirname4(fileURLToPath(import.meta.url));
-      const pkg = JSON.parse(readFileSync9(resolve18(here, "..", "..", "..", "..", "package.json"), "utf-8"));
-      _version = pkg.version ?? "unknown";
+      let dir = typeof __dirname !== "undefined" ? __dirname : dirname4(fileURLToPath(import.meta.url));
+      for (let i = 0; i < 6; i++) {
+        try {
+          const pkg = JSON.parse(readFileSync9(resolve18(dir, "package.json"), "utf-8"));
+          if (pkg.name === "gzoo-cortex" && pkg.version) {
+            _version = pkg.version;
+            break;
+          }
+        } catch {
+        }
+        dir = resolve18(dir, "..");
+      }
     } catch {
     }
   }
@@ -7762,7 +7772,7 @@ async function runServe(opts, globals) {
 
 // packages/cli/dist/index.js
 var program = new Command();
-program.name("cortex").description("Local-first knowledge orchestrator \u2014 remembers what you decided, why, and where.").version("0.2.9").option("--config <path>", "Config file path").option("--verbose", "Show debug-level output", false).option("--quiet", "Suppress all non-error output", false).option("--json", "Output as JSON (for scripting)", false).option("--no-color", "Disable color output");
+program.name("cortex").description("Local-first knowledge orchestrator \u2014 remembers what you decided, why, and where.").version("0.3.2").option("--config <path>", "Config file path").option("--verbose", "Show debug-level output", false).option("--quiet", "Suppress all non-error output", false).option("--json", "Output as JSON (for scripting)", false).option("--no-color", "Disable color output");
 registerInitCommand(program);
 registerWatchCommand(program);
 registerQueryCommand(program);
