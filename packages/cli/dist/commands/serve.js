@@ -1,5 +1,6 @@
 import { resolve, dirname } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { loadConfig, createLogger } from '@cortex/core';
 function findPkgRoot(startDir) {
     let dir = startDir;
@@ -48,6 +49,10 @@ async function runServe(opts, globals) {
             // Web dashboard not built yet — that's fine
         }
         const { startServer } = await import('@cortex/server');
+        // Write PID file for stop/restart
+        const pidDir = resolve(homedir(), '.cortex');
+        mkdirSync(pidDir, { recursive: true });
+        writeFileSync(resolve(pidDir, 'cortex.pid'), String(process.pid));
         await startServer({
             config,
             port: Number(opts.port),

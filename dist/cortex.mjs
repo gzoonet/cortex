@@ -7506,8 +7506,8 @@ async function confirm(message, force) {
     return true;
   const { createInterface } = await import("node:readline");
   const rl = createInterface({ input: process.stdin, output: process.stderr });
-  const answer = await new Promise((resolve21) => {
-    rl.question(chalk15.yellow(message + " [y/N] "), resolve21);
+  const answer = await new Promise((resolve22) => {
+    rl.question(chalk15.yellow(message + " [y/N] "), resolve22);
   });
   rl.close();
   return answer.toLowerCase() === "y";
@@ -7717,7 +7717,8 @@ function buildBar2(ratio, width) {
 // packages/cli/dist/commands/serve.js
 init_dist();
 import { resolve as resolve20, dirname as dirname5 } from "node:path";
-import { readFileSync as readFileSync10 } from "node:fs";
+import { readFileSync as readFileSync10, writeFileSync as writeFileSync5, mkdirSync as mkdirSync6 } from "node:fs";
+import { homedir as homedir7 } from "node:os";
 function findPkgRoot(startDir) {
   let dir = startDir;
   for (let i = 0; i < 10; i++) {
@@ -7749,13 +7750,16 @@ async function runServe(opts, globals) {
     const pkgRoot = findPkgRoot(import.meta.dirname);
     try {
       const webPkgPath = resolve20(pkgRoot, "packages/web/dist");
-      const { existsSync: existsSync8 } = await import("node:fs");
-      if (existsSync8(webPkgPath)) {
+      const { existsSync: existsSync9 } = await import("node:fs");
+      if (existsSync9(webPkgPath)) {
         webDistPath = webPkgPath;
       }
     } catch {
     }
     const { startServer: startServer2 } = await Promise.resolve().then(() => (init_dist5(), dist_exports2));
+    const pidDir = resolve20(homedir7(), ".cortex");
+    mkdirSync6(pidDir, { recursive: true });
+    writeFileSync5(resolve20(pidDir, "cortex.pid"), String(process.pid));
     await startServer2({
       config: config8,
       port: Number(opts.port),
@@ -7770,9 +7774,74 @@ async function runServe(opts, globals) {
   }
 }
 
+// packages/cli/dist/commands/stop.js
+import { resolve as resolve21 } from "node:path";
+import { readFileSync as readFileSync11, unlinkSync, existsSync as existsSync8 } from "node:fs";
+import { homedir as homedir8 } from "node:os";
+var PID_FILE = resolve21(homedir8(), ".cortex", "cortex.pid");
+function readPid() {
+  try {
+    const pid = Number(readFileSync11(PID_FILE, "utf-8").trim());
+    return Number.isFinite(pid) ? pid : null;
+  } catch {
+    return null;
+  }
+}
+function isRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function stopServer() {
+  const pid = readPid();
+  if (!pid || !isRunning(pid)) {
+    if (pid && existsSync8(PID_FILE))
+      unlinkSync(PID_FILE);
+    console.log("Cortex is not running.");
+    return false;
+  }
+  process.kill(pid, "SIGTERM");
+  console.log(`Cortex (PID ${pid}) stopped.`);
+  try {
+    unlinkSync(PID_FILE);
+  } catch {
+  }
+  return true;
+}
+function registerStopCommand(program2) {
+  program2.command("stop").description("Stop the running Cortex server").action(() => {
+    stopServer();
+  });
+}
+function registerRestartCommand(program2) {
+  program2.command("restart").description("Restart the Cortex server (stop + serve)").option("--port <port>", "Port to listen on (default: 3710)", "3710").option("--host <host>", "Host to bind to (default: 127.0.0.1)", "127.0.0.1").option("--no-watch", "Disable file watcher").action(async (opts) => {
+    const pid = readPid();
+    if (pid && isRunning(pid)) {
+      process.kill(pid, "SIGTERM");
+      console.log(`Stopped Cortex (PID ${pid}).`);
+      try {
+        unlinkSync(PID_FILE);
+      } catch {
+      }
+      await new Promise((r) => setTimeout(r, 1e3));
+    }
+    console.log("Starting Cortex...");
+    const serveCmd = program2.commands.find((c) => c.name() === "serve");
+    if (serveCmd) {
+      const args = ["--port", opts.port, "--host", opts.host];
+      if (!opts.watch)
+        args.push("--no-watch");
+      await serveCmd.parseAsync(args, { from: "user" });
+    }
+  });
+}
+
 // packages/cli/dist/index.js
 var program = new Command();
-program.name("cortex").description("Local-first knowledge orchestrator \u2014 remembers what you decided, why, and where.").version("0.3.2").option("--config <path>", "Config file path").option("--verbose", "Show debug-level output", false).option("--quiet", "Suppress all non-error output", false).option("--json", "Output as JSON (for scripting)", false).option("--no-color", "Disable color output");
+program.name("cortex").description("Local-first knowledge orchestrator \u2014 remembers what you decided, why, and where.").version("0.4.0").option("--config <path>", "Config file path").option("--verbose", "Show debug-level output", false).option("--quiet", "Suppress all non-error output", false).option("--json", "Output as JSON (for scripting)", false).option("--no-color", "Disable color output");
 registerInitCommand(program);
 registerWatchCommand(program);
 registerQueryCommand(program);
@@ -7791,4 +7860,6 @@ registerMcpCommand(program);
 registerDbCommand(program);
 registerReportCommand(program);
 registerServeCommand(program);
+registerStopCommand(program);
+registerRestartCommand(program);
 program.parse(process.argv);

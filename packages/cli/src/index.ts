@@ -18,13 +18,14 @@ import { registerMcpCommand } from './commands/mcp.js';
 import { registerDbCommand } from './commands/db.js';
 import { registerReportCommand } from './commands/report.js';
 import { registerServeCommand } from './commands/serve.js';
+import { registerStopCommand, registerRestartCommand } from './commands/stop.js';
 
 const program = new Command();
 
 program
   .name('cortex')
   .description('Local-first knowledge orchestrator — remembers what you decided, why, and where.')
-  .version('0.3.2')
+  .version('0.4.0')
   .option('--config <path>', 'Config file path')
   .option('--verbose', 'Show debug-level output', false)
   .option('--quiet', 'Suppress all non-error output', false)
@@ -57,5 +58,7 @@ registerMcpCommand(program);
 registerDbCommand(program);
 registerReportCommand(program);
 registerServeCommand(program);
+registerStopCommand(program);
+registerRestartCommand(program);
 
 program.parse(process.argv);

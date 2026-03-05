@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { resolve, dirname } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { loadConfig, createLogger } from '@cortex/core';
 import type { GlobalOptions } from '../index.js';
 
@@ -55,6 +56,11 @@ async function runServe(
     }
 
     const { startServer } = await import('@cortex/server');
+    // Write PID file for stop/restart
+    const pidDir = resolve(homedir(), '.cortex');
+    mkdirSync(pidDir, { recursive: true });
+    writeFileSync(resolve(pidDir, 'cortex.pid'), String(process.pid));
+
     await startServer({
       config,
       port: Number(opts.port),
