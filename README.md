@@ -39,7 +39,16 @@ and gives it back to you when you need it.
 ### Install
 
 ```bash
-npm install -g gzoo-cortex
+git clone https://github.com/gzoonet/cortex.git
+cd cortex
+npm install
+npm run build
+```
+
+Optionally, link the CLI globally:
+
+```bash
+npm link
 ```
 
 ### Setup
