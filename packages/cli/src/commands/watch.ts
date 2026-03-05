@@ -246,6 +246,18 @@ async function runWatch(
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
+  // Ensure raw Ctrl+C works even if ora or other libs intercept SIGINT
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.on('data', (data: Buffer) => {
+      // Ctrl+C is byte 0x03
+      if (data[0] === 0x03) {
+        shutdown();
+      }
+    });
+  }
+
   // Keep process alive — this promise never resolves;
   // the process exits via signal handlers calling process.exit()
   await new Promise<void>(() => {});
