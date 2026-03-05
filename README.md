@@ -36,7 +36,7 @@ and gives it back to you when you need it.
 
 ## Quick Start
 
-### Install
+### 1. Install
 
 ```bash
 npm install -g gzoo-cortex
@@ -47,20 +47,35 @@ Or install from source:
 ```bash
 git clone https://github.com/gzoonet/cortex.git
 cd cortex
-npm install
-npm run build
-npm link
+npm install && npm run build && npm link
 ```
 
-### Setup
+### 2. Setup
+
+Run the interactive wizard:
 
 ```bash
-cortex init                                # interactive setup wizard
-cortex projects add my-app ~/projects/app  # register a project
-cortex projects add api ~/projects/api     # add more projects
+cortex init
 ```
 
-### Watch & Query
+This walks you through:
+- **LLM provider** — Anthropic, Google Gemini, Groq, OpenRouter, or Ollama (local)
+- **API key** — saved securely to `~/.cortex/.env`
+- **Routing mode** — cloud-first, hybrid, local-first, or local-only
+- **Watch directories** — which directories Cortex should monitor
+- **Budget limit** — monthly LLM spend cap
+
+Config is stored at `~/.cortex/cortex.config.json`. API keys go in `~/.cortex/.env`.
+
+### 3. Register Projects
+
+```bash
+cortex projects add my-app ~/projects/app
+cortex projects add api ~/projects/api
+cortex projects list                       # verify
+```
+
+### 4. Watch & Query
 
 ```bash
 cortex watch                               # start watching for changes
@@ -70,10 +85,21 @@ cortex find "PostgreSQL" --expand 2
 cortex contradictions
 ```
 
-### Web Dashboard
+### 5. Web Dashboard
 
 ```bash
 cortex serve                               # open http://localhost:3710
+```
+
+### Excluding Files & Directories
+
+Cortex ignores `node_modules`, `dist`, `.git`, and other common directories by default. To add more:
+
+```bash
+cortex config exclude add docs             # exclude a directory
+cortex config exclude add "*.log"          # exclude by pattern
+cortex config exclude list                 # see all excludes
+cortex config exclude remove docs          # remove an exclude
 ```
 
 ## How It Works
@@ -119,10 +145,13 @@ and reasoning-heavy tasks (relationship inference, queries) to your cloud provid
 
 ## Configuration
 
+All config lives in `~/.cortex/cortex.config.json`. API keys are in `~/.cortex/.env`.
+
 ```bash
-cortex config list                       # see all settings
+cortex config list                       # see all non-default settings
 cortex config set llm.mode hybrid        # switch routing mode
 cortex config set llm.budget.monthlyLimitUsd 10  # set budget
+cortex config exclude add vendor         # exclude a directory from watching
 cortex privacy set ~/clients restricted  # mark directory as restricted
 ```
 
@@ -149,6 +178,7 @@ Full configuration reference: [docs/config.md](docs/config.md)
 | `cortex report` | Post-ingestion summary |
 | `cortex privacy set <dir> <level>` | Set directory privacy |
 | `cortex config list/get/set` | Read/write configuration |
+| `cortex config exclude add/remove/list` | Manage file/directory exclusions |
 | `cortex db` | Database operations |
 
 Full CLI reference: [docs/cli-commands.md](docs/cli-commands.md)
