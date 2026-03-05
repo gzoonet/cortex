@@ -10,6 +10,9 @@ docs/
 .env
 .env.example
 
+# Nested node_modules (hoisted to root by npm workspaces)
+packages/*/node_modules/
+
 # Build artifacts
 *.tsbuildinfo
 
