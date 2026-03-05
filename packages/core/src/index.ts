@@ -63,4 +63,4 @@ export {
 } from './config/project-registry.js';
 
 // Logger
-export { Logger, createLogger } from './logger.js';
+export { Logger, createLogger, setGlobalLogLevel } from './logger.js';

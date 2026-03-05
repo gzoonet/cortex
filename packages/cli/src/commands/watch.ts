@@ -3,7 +3,7 @@ import { resolve, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import chalk from 'chalk';
 import ora from 'ora';
-import { loadConfig, findConfigFile, createLogger, eventBus, getProject, updateProjectLastWatched } from '@cortex/core';
+import { loadConfig, findConfigFile, createLogger, setGlobalLogLevel, eventBus, getProject, updateProjectLastWatched } from '@cortex/core';
 import { SQLiteStore } from '@cortex/graph';
 import { Router } from '@cortex/llm';
 import { FileWatcher, IngestionPipeline } from '@cortex/ingest';
@@ -61,6 +61,11 @@ async function runWatch(
   }
 
   const config = loadConfig({ configDir });
+
+  // Suppress noisy JSON log lines unless --verbose
+  if (!globals.verbose) {
+    setGlobalLogLevel('error');
+  }
 
   if (!globals.quiet) {
     if (projectDisplayName) {

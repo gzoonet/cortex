@@ -7,6 +7,12 @@ const LOG_LEVELS: Record<LogLevel, number> = {
   error: 3,
 };
 
+let globalLogLevel: number | null = null;
+
+export function setGlobalLogLevel(level: LogLevel): void {
+  globalLogLevel = LOG_LEVELS[level];
+}
+
 interface LogEntry {
   level: LogLevel;
   message: string;
@@ -51,7 +57,8 @@ export class Logger {
   }
 
   private log(level: LogLevel, message: string, context?: Record<string, unknown>): void {
-    if (LOG_LEVELS[level] < this.level) return;
+    const effectiveLevel = globalLogLevel ?? this.level;
+    if (LOG_LEVELS[level] < effectiveLevel) return;
 
     const entry: LogEntry = {
       level,
