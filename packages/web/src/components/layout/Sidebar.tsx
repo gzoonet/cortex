@@ -20,7 +20,7 @@ export function Sidebar() {
     <aside className="flex h-full w-56 flex-col border-r border-zinc-800 bg-zinc-900">
       {/* Logo */}
       <div className="flex items-center gap-2.5 border-b border-zinc-800 px-5 py-4">
-        <img src="/icon.png" alt="GZOO Cortex" className="h-6 w-6" />
+        <img src="/logo.png" alt="GZOO Cortex" className="h-6 w-6" />
         <span className="text-lg font-bold tracking-tight text-zinc-100">
           GZOO Cortex
         </span>
