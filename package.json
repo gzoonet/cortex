@@ -1,6 +1,6 @@
 {
   "name": "gzoo-cortex",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Local-first knowledge graph that watches your project files, extracts entities and relationships via LLMs, and lets you query across projects in natural language.",
   "type": "module",
   "license": "MIT",

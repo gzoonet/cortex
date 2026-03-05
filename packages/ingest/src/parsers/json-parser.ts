@@ -1,20 +1,69 @@
 import type { Parser, ParseResult, ParsedSection } from './types.js';
 
-// Strip single-line (//) and block (/* */) comments so JSONC files (tsconfig, etc.) parse cleanly.
+/**
+ * Strip JSONC features (comments + trailing commas) so JSON.parse works.
+ * Respects string boundaries to avoid stripping inside quoted values.
+ */
 function stripJsonComments(text: string): string {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' ')) // block comments → spaces (preserve line numbers)
-    .replace(/\/\/[^\n]*/g, '');                                      // line comments → empty
+  let result = '';
+  let i = 0;
+  let inString = false;
+
+  while (i < text.length) {
+    const ch = text[i]!;
+    const next = text[i + 1];
+
+    // Handle string boundaries (skip escaped quotes)
+    if (ch === '"' && (i === 0 || text[i - 1] !== '\\')) {
+      inString = !inString;
+      result += ch;
+      i++;
+      continue;
+    }
+
+    if (inString) {
+      result += ch;
+      i++;
+      continue;
+    }
+
+    // Block comment: /* ... */
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) {
+        result += text[i] === '\n' ? '\n' : ' ';
+        i++;
+      }
+      i += 2;
+      continue;
+    }
+
+    // Line comment: // ...
+    if (ch === '/' && next === '/') {
+      i += 2;
+      while (i < text.length && text[i] !== '\n') i++;
+      continue;
+    }
+
+    result += ch;
+    i++;
+  }
+
+  // Strip trailing commas before } or ]
+  result = result.replace(/,\s*([\]\}])/g, '$1');
+
+  return result;
 }
 
 function parseJsonOrJsonc(content: string): unknown {
   try {
     return JSON.parse(content);
   } catch {
-    // Retry with comment stripping (JSONC: tsconfig, etc.)
+    // Retry with JSONC stripping (comments + trailing commas)
     return JSON.parse(stripJsonComments(content));
   }
 }
+
 
 export class JsonParser implements Parser {
   readonly supportedExtensions = ['json'];
