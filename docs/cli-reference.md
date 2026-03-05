@@ -90,6 +90,8 @@ cortex watch --no-confirm         # Skip cost estimates, start immediately
 ```
 
 **Notes:**
+- **If you are using the web dashboard (`cortex serve`), you do not need `cortex watch`.** The server includes its own file watcher. Running both at the same time will cause them to compete for file changes.
+- Use `cortex watch` when you want CLI-only ingestion without the dashboard.
 - Press `Ctrl+C` to stop watching.
 - File changes are debounced (default 300ms) to avoid redundant processing.
 - Respects exclude patterns from config (see `cortex config exclude list`).
@@ -228,7 +230,7 @@ cortex costs --by day --json
 
 ### cortex serve
 
-Start the web dashboard and REST API server.
+Start the web dashboard, REST API server, and file watcher. This is the recommended way to run Cortex — it combines the dashboard with automatic file watching, so you do not need `cortex watch` separately.
 
 ```bash
 cortex serve [options]

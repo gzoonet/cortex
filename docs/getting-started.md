@@ -52,11 +52,32 @@ cortex projects list
 
 ## 4. Start Watching
 
+There are two ways to run the ingestion pipeline:
+
+| Command | What it does |
+|---------|-------------|
+| `cortex serve` | Web dashboard + API + file watching + ingestion (recommended) |
+| `cortex watch` | File watching + ingestion only (CLI, no dashboard) |
+
+> **You do not need both.** `cortex serve` already includes a file watcher.
+> If you run `cortex watch` and `cortex serve` at the same time, they will compete
+> for file changes and the Live Feed in the dashboard will not show events.
+
+For most users, just run:
+
+```bash
+cortex serve
+```
+
+This starts the dashboard at `http://localhost:3710` and watches all registered projects.
+
+If you only want CLI-based ingestion without the web UI:
+
 ```bash
 cortex watch
 ```
 
-Cortex now monitors your watch directories for file changes. When a file is saved, it:
+When a file is saved, Cortex:
 1. Parses the file (markdown, TypeScript, JSON, YAML)
 2. Extracts entities (decisions, patterns, components, etc.)
 3. Infers relationships between entities
@@ -69,7 +90,7 @@ Watch a specific project:
 cortex watch my-app
 ```
 
-Stop watching with **Ctrl+C**.
+Stop with **Ctrl+C**.
 
 ## 5. Ingest Existing Files
 
@@ -124,7 +145,10 @@ Shows: entity/relationship counts, LLM provider status, budget usage, storage si
 cortex serve
 ```
 
-Opens a web dashboard at `http://localhost:3710` with:
+Starts the server at `http://localhost:3710` — this includes **both the web dashboard and a file watcher**.
+You do not need `cortex watch` when running `cortex serve`.
+
+The dashboard includes:
 - **Dashboard** — stats, recent entities, entity type breakdown
 - **Graph** — interactive knowledge graph visualization
 - **Live Feed** — real-time ingestion events (shows DB stats on load)

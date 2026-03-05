@@ -174,11 +174,12 @@ export function LiveFeed() {
         <div className="flex flex-1 flex-col items-center justify-center gap-3 text-zinc-500">
           <Radio className="h-12 w-12 text-zinc-700" />
           <p className="text-sm">Waiting for events...</p>
-          <p className="text-xs text-zinc-600">
-            Modify a watched file to see live events here.
+          <p className="max-w-md text-center text-xs text-zinc-600">
+            Edit a file in one of your registered projects to see live ingestion events.
           </p>
-          <p className="text-xs text-zinc-600">
-            The server watches registered projects automatically.
+          <p className="max-w-md text-center text-xs text-zinc-600">
+            The server watches your projects automatically &mdash; you do not need
+            to run <code className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-400">cortex watch</code> separately.
           </p>
         </div>
       ) : (
