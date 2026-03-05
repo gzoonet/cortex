@@ -1,6 +1,6 @@
 {
   "name": "gzoo-cortex",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Local-first knowledge graph that watches your project files, extracts entities and relationships via LLMs, and lets you query across projects in natural language.",
   "type": "module",
   "license": "MIT",
@@ -44,10 +44,11 @@
     "dev": "npm run dev --workspace=packages/cli",
     "lint": "tsc --noEmit",
     "clean": "tsc --build --clean",
-    "cortex": "node packages/cli/dist/index.js"
+    "cortex": "node packages/cli/dist/index.js",
+    "build:bundle": "npm run build && node scripts/bundle.cjs"
   },
   "bin": {
-    "cortex": "packages/cli/dist/index.js"
+    "cortex": "dist/cortex.mjs"
   },
   "engines": {
     "node": ">=20.0.0",
@@ -55,6 +56,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.35",
+    "esbuild": "^0.27.3",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   },

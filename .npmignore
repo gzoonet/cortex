@@ -23,3 +23,9 @@ packages/*/node_modules/
 *.swo
 Thumbs.db
 .DS_Store
+
+# Build scripts (not needed at runtime)
+scripts/
+
+# Source files (only dist/ needed at runtime)
+packages/*/src/

@@ -1,7 +1,23 @@
 import { Command } from 'commander';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { loadConfig, createLogger } from '@cortex/core';
 import type { GlobalOptions } from '../index.js';
+
+function findPkgRoot(startDir: string): string {
+  let dir = startDir;
+  for (let i = 0; i < 10; i++) {
+    try {
+      const pkgPath = resolve(dir, 'package.json');
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+      if (pkg.name === 'gzoo-cortex') return dir;
+    } catch { /* keep looking */ }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return startDir;
+}
 
 const logger = createLogger('cli:serve');
 
@@ -27,8 +43,9 @@ async function runServe(
 
     // Try to find the web dashboard dist
     let webDistPath: string | undefined;
+    const pkgRoot = findPkgRoot(import.meta.dirname);
     try {
-      const webPkgPath = resolve(import.meta.dirname, '../../..', 'web', 'dist');
+      const webPkgPath = resolve(pkgRoot, 'packages/web/dist');
       const { existsSync } = await import('node:fs');
       if (existsSync(webPkgPath)) {
         webDistPath = webPkgPath;
