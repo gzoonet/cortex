@@ -26,6 +26,7 @@ export function createStatusRoutes(bundle: ServerBundle): Router {
       res.json({
         success: true,
         data: {
+          version: _version,
           graph: {
             entityCount: stats.entityCount,
             relationshipCount: stats.relationshipCount,

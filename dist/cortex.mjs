@@ -2740,6 +2740,9 @@ var init_router = __esm({
           type: "llm.request.complete",
           payload: {
             requestId,
+            task: request.task,
+            provider: providerName,
+            model: result.model,
             usage: {
               inputTokens: result.inputTokens,
               outputTokens: result.outputTokens,
@@ -2833,6 +2836,9 @@ var init_router = __esm({
           type: "llm.request.complete",
           payload: {
             requestId,
+            task: request.task,
+            provider: providerName,
+            model: tokens.model,
             usage: {
               inputTokens: tokens.inputTokens,
               outputTokens: tokens.outputTokens,
@@ -4944,6 +4950,9 @@ var init_contradictions = __esm({
 
 // packages/server/dist/routes/status.js
 import { Router as Router7 } from "express";
+import { readFileSync as readFileSync9 } from "node:fs";
+import { resolve as resolve18, dirname as dirname4 } from "node:path";
+import { fileURLToPath } from "node:url";
 function createStatusRoutes(bundle) {
   const router = Router7();
   const { store, router: llmRouter } = bundle;
@@ -4995,9 +5004,17 @@ function createStatusRoutes(bundle) {
   });
   return router;
 }
+var _version;
 var init_status = __esm({
   "packages/server/dist/routes/status.js"() {
     "use strict";
+    _version = "unknown";
+    try {
+      const here = typeof __dirname !== "undefined" ? __dirname : dirname4(fileURLToPath(import.meta.url));
+      const pkg = JSON.parse(readFileSync9(resolve18(here, "..", "..", "..", "..", "package.json"), "utf-8"));
+      _version = pkg.version ?? "unknown";
+    } catch {
+    }
   }
 });
 
@@ -5082,7 +5099,7 @@ __export(dist_exports2, {
 });
 import express from "express";
 import { createServer } from "node:http";
-import { resolve as resolve18 } from "node:path";
+import { resolve as resolve19 } from "node:path";
 import cors from "cors";
 function createBundle(config8) {
   const store = new SQLiteStore({ dbPath: config8.graph.dbPath, backupOnStartup: false });
@@ -5111,10 +5128,10 @@ async function startServer(options) {
   const relay = createEventRelay(server);
   logger27.info("WebSocket relay attached", { path: "/ws" });
   if (options.webDistPath) {
-    const webDist = resolve18(options.webDistPath);
+    const webDist = resolve19(options.webDistPath);
     app.use(express.static(webDist));
     app.get("*", (_req, res) => {
-      res.sendFile(resolve18(webDist, "index.html"));
+      res.sendFile(resolve19(webDist, "index.html"));
     });
     logger27.info("Serving web dashboard", { path: webDist });
   }
@@ -7479,8 +7496,8 @@ async function confirm(message, force) {
     return true;
   const { createInterface } = await import("node:readline");
   const rl = createInterface({ input: process.stdin, output: process.stderr });
-  const answer = await new Promise((resolve20) => {
-    rl.question(chalk15.yellow(message + " [y/N] "), resolve20);
+  const answer = await new Promise((resolve21) => {
+    rl.question(chalk15.yellow(message + " [y/N] "), resolve21);
   });
   rl.close();
   return answer.toLowerCase() === "y";
@@ -7689,19 +7706,19 @@ function buildBar2(ratio, width) {
 
 // packages/cli/dist/commands/serve.js
 init_dist();
-import { resolve as resolve19, dirname as dirname4 } from "node:path";
-import { readFileSync as readFileSync9 } from "node:fs";
+import { resolve as resolve20, dirname as dirname5 } from "node:path";
+import { readFileSync as readFileSync10 } from "node:fs";
 function findPkgRoot(startDir) {
   let dir = startDir;
   for (let i = 0; i < 10; i++) {
     try {
-      const pkgPath = resolve19(dir, "package.json");
-      const pkg = JSON.parse(readFileSync9(pkgPath, "utf-8"));
+      const pkgPath = resolve20(dir, "package.json");
+      const pkg = JSON.parse(readFileSync10(pkgPath, "utf-8"));
       if (pkg.name === "gzoo-cortex")
         return dir;
     } catch {
     }
-    const parent = dirname4(dir);
+    const parent = dirname5(dir);
     if (parent === dir)
       break;
     dir = parent;
@@ -7717,11 +7734,11 @@ function registerServeCommand(program2) {
 }
 async function runServe(opts, globals) {
   try {
-    const config8 = loadConfig({ configDir: globals.config ? resolve19(globals.config) : void 0 });
+    const config8 = loadConfig({ configDir: globals.config ? resolve20(globals.config) : void 0 });
     let webDistPath;
     const pkgRoot = findPkgRoot(import.meta.dirname);
     try {
-      const webPkgPath = resolve19(pkgRoot, "packages/web/dist");
+      const webPkgPath = resolve20(pkgRoot, "packages/web/dist");
       const { existsSync: existsSync8 } = await import("node:fs");
       if (existsSync8(webPkgPath)) {
         webDistPath = webPkgPath;
@@ -7745,7 +7762,7 @@ async function runServe(opts, globals) {
 
 // packages/cli/dist/index.js
 var program = new Command();
-program.name("cortex").description("Local-first knowledge orchestrator \u2014 remembers what you decided, why, and where.").version("0.2.7").option("--config <path>", "Config file path").option("--verbose", "Show debug-level output", false).option("--quiet", "Suppress all non-error output", false).option("--json", "Output as JSON (for scripting)", false).option("--no-color", "Disable color output");
+program.name("cortex").description("Local-first knowledge orchestrator \u2014 remembers what you decided, why, and where.").version("0.2.9").option("--config <path>", "Config file path").option("--verbose", "Show debug-level output", false).option("--quiet", "Suppress all non-error output", false).option("--json", "Output as JSON (for scripting)", false).option("--no-color", "Disable color output");
 registerInitCommand(program);
 registerWatchCommand(program);
 registerQueryCommand(program);
