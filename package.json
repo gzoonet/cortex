@@ -1,0 +1,58 @@
+{
+  "name": "@gzoo/cortex",
+  "version": "0.1.0",
+  "description": "Local-first knowledge graph that watches your project files, extracts entities and relationships via LLMs, and lets you query across projects in natural language.",
+  "type": "module",
+  "license": "MIT",
+  "author": "GZOO Media LLC <hello@gzoo.ai> (https://gzoo.ai)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gzoonet/cortex.git"
+  },
+  "homepage": "https://github.com/gzoonet/cortex",
+  "bugs": {
+    "url": "https://github.com/gzoonet/cortex/issues"
+  },
+  "keywords": [
+    "knowledge-graph",
+    "developer-tools",
+    "local-first",
+    "llm",
+    "cli",
+    "file-watcher",
+    "sqlite",
+    "vector-search",
+    "ollama",
+    "anthropic",
+    "gemini",
+    "openai-compatible",
+    "entity-extraction",
+    "cross-project",
+    "second-brain",
+    "mcp",
+    "web-dashboard"
+  ],
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc --build --force",
+    "build:clean": "tsc --build --clean && tsc --build --force",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "dev": "npm run dev --workspace=packages/cli",
+    "lint": "tsc --noEmit",
+    "clean": "tsc --build --clean",
+    "cortex": "node packages/cli/dist/index.js"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.35",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

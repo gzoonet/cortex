@@ -1,0 +1,32 @@
+{
+  "name": "@cortex/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "dev": "tsc --build --watch"
+  },
+  "dependencies": {
+    "@cortex/core": "*",
+    "@cortex/graph": "*",
+    "@cortex/llm": "*",
+    "@cortex/ingest": "*",
+    "express": "^4.21.0",
+    "cors": "^2.8.5",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/cors": "^2.8.17",
+    "@types/ws": "^8.5.13"
+  }
+}

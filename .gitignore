@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.npm
+
+# Build
+dist/
+*.tsbuildinfo
+
+# Data (never commit user data)
+*.db
+*.db-journal
+*.db-wal
+*.lance/
+*.log
+transmission.log
+
+# Config with secrets
+cortex.config.json
+.env
+.env.local
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test / misc
+coverage/
+npm-debug.log*
+.claude/
+.cortex/

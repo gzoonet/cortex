@@ -1,0 +1,20 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "We need to decide on the primary database for the BookFlow project. I'm considering PostgreSQL vs SQLite. What are the trade-offs?"
+    },
+    {
+      "role": "assistant",
+      "content": "For BookFlow, the key trade-offs are: PostgreSQL offers full ACID compliance, concurrent writes, and scales horizontally — ideal if you expect multiple simultaneous booking writers. SQLite is zero-config, single-file, and perfect for local-first tools with low concurrency. Given BookFlow is a booking platform with concurrent users, PostgreSQL is the stronger choice. I'd recommend PostgreSQL with connection pooling via PgBouncer."
+    },
+    {
+      "role": "user",
+      "content": "That makes sense. We decided to use PostgreSQL with Stripe Connect for marketplace payments. The architecture decision is finalized."
+    },
+    {
+      "role": "assistant",
+      "content": "Good decision. For the Stripe Connect integration, make sure to use the platform account for fee collection and transfer API for marketplace payouts. Document the connect account onboarding flow as an ActionItem — it's often the most complex part."
+    }
+  ]
+}

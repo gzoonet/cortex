@@ -1,0 +1,37 @@
+{
+  "name": "@cortex/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "cortex": "dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "dev": "tsc --build --watch",
+    "test": "echo \"No tests yet\""
+  },
+  "dependencies": {
+    "@cortex/core": "*",
+    "@cortex/graph": "*",
+    "@cortex/ingest": "*",
+    "@cortex/llm": "*",
+    "@cortex/server": "*",
+    "chalk": "^4.1.2",
+    "cli-table3": "^0.6.5",
+    "commander": "^14.0.3",
+    "inquirer": "^13.3.0",
+    "ora": "^9.3.0"
+  },
+  "devDependencies": {
+    "@types/inquirer": "^9.0.9"
+  }
+}

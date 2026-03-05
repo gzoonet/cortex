@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/ingest" },
+    { "path": "packages/graph" },
+    { "path": "packages/llm" },
+    { "path": "packages/cli" },
+    { "path": "packages/mcp" },
+    { "path": "packages/server" }
+  ]
+}

@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@theme {
+  --color-cortex-50: #f0f9ff;
+  --color-cortex-100: #e0f2fe;
+  --color-cortex-200: #bae6fd;
+  --color-cortex-300: #7dd3fc;
+  --color-cortex-400: #38bdf8;
+  --color-cortex-500: #0ea5e9;
+  --color-cortex-600: #0284c7;
+  --color-cortex-700: #0369a1;
+  --color-cortex-800: #075985;
+  --color-cortex-900: #0c4a6e;
+
+  --color-entity-decision: #f59e0b;
+  --color-entity-requirement: #3b82f6;
+  --color-entity-pattern: #8b5cf6;
+  --color-entity-component: #10b981;
+  --color-entity-dependency: #ef4444;
+  --color-entity-interface: #06b6d4;
+  --color-entity-constraint: #f97316;
+  --color-entity-actionitem: #ec4899;
+  --color-entity-risk: #dc2626;
+  --color-entity-note: #6b7280;
+}

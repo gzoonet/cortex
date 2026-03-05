@@ -1,0 +1,25 @@
+{
+  "name": "@cortex/llm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "dev": "tsc --build --watch",
+    "test": "echo \"No tests yet\""
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "@cortex/core": "*",
+    "openai": "^4.0.0",
+    "zod": "^3.25.76"
+  }
+}
