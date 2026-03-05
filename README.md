@@ -1,5 +1,9 @@
 # GZOO Cortex
 
+<p align="center">
+  <img src="social-preview.png" alt="GZOO Cortex — Local-first knowledge graph for developers" width="100%" />
+</p>
+
 **Local-first knowledge graph for developers.** Watches your project files,
 extracts entities and relationships using LLMs, and lets you query across
 all your projects in natural language.
