@@ -6,6 +6,7 @@ import { handleQueryCortex } from './tools/query.js';
 import { handleFindEntity } from './tools/find.js';
 import { handleListProjects } from './tools/projects.js';
 import { handleGetStatus } from './tools/status.js';
+import { handleGetContradictions, handleResolveContradiction } from './tools/contradictions.js';
 
 export function createCortexMcpServer(bundle: StoreBundle, router: Router): McpServer {
   const server = new McpServer({
@@ -90,6 +91,50 @@ export function createCortexMcpServer(bundle: StoreBundle, router: Router): McpS
         bundle.store,
       );
       return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    },
+  );
+
+
+  server.registerTool(
+    'get_contradictions',
+    {
+      title: 'Get Contradictions',
+      description:
+        'List contradictions detected in the knowledge graph. Contradictions occur when ' +
+        'two entities make conflicting claims (e.g., different tech choices for the same thing). ' +
+        'Returns both entities with summaries so you can understand and help resolve them.',
+      inputSchema: {
+        status: z.string().optional().describe(
+          'Filter by status: active, resolved, or dismissed (default: all)',
+        ),
+        limit: z.number().optional().describe('Max results to return (default: 50)'),
+      },
+    },
+    async ({ status, limit }) => {
+      const result = await handleGetContradictions({ status, limit }, bundle.store);
+      return { content: [{ type: 'text' as const, text: result }] };
+    },
+  );
+
+  server.registerTool(
+    'resolve_contradiction',
+    {
+      title: 'Resolve Contradiction',
+      description:
+        'Resolve a contradiction by choosing an action: ' +
+        'supersede (entity A replaces B), keep_old (keep B, discard A), ' +
+        'dismiss (not a real contradiction), both_valid (both are correct in context). ' +
+        'Get contradiction IDs from get_contradictions first.',
+      inputSchema: {
+        id: z.string().describe('The contradiction ID to resolve'),
+        action: z.string().describe(
+          'Resolution action: supersede, keep_old, dismiss, or both_valid',
+        ),
+      },
+    },
+    async ({ id, action }) => {
+      const result = await handleResolveContradiction({ id, action }, bundle.store);
+      return { content: [{ type: 'text' as const, text: result }] };
     },
   );
 
