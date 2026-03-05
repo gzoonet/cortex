@@ -19,13 +19,28 @@ import { registerDbCommand } from './commands/db.js';
 import { registerReportCommand } from './commands/report.js';
 import { registerServeCommand } from './commands/serve.js';
 import { registerStopCommand, registerRestartCommand } from './commands/stop.js';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+function getVersion(): string {
+  let dir = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i++) {
+    try {
+      const pkg = JSON.parse(readFileSync(resolve(dir, 'package.json'), 'utf-8'));
+      if (pkg.name === 'gzoo-cortex' && pkg.version) return pkg.version;
+    } catch { /* not here */ }
+    dir = resolve(dir, '..');
+  }
+  return 'unknown';
+}
 
 const program = new Command();
 
 program
   .name('cortex')
   .description('Local-first knowledge orchestrator — remembers what you decided, why, and where.')
-  .version('0.5.1')
+  .version(getVersion())
   .option('--config <path>', 'Config file path')
   .option('--verbose', 'Show debug-level output', false)
   .option('--quiet', 'Suppress all non-error output', false)
