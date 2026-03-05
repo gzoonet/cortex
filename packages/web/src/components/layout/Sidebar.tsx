@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
+import { api } from '../../stores/api';
 import {
   LayoutDashboard,
   Network,
@@ -16,6 +18,12 @@ const NAV_ITEMS = [
 ] as const;
 
 export function Sidebar() {
+  const [version, setVersion] = useState<string>('');
+
+  useEffect(() => {
+    api.getStatus().then((res) => setVersion(res.data.version ?? '')).catch(() => {});
+  }, []);
+
   return (
     <aside className="flex h-full w-56 flex-col border-r border-zinc-800 bg-zinc-900">
       {/* Logo */}
@@ -46,9 +54,12 @@ export function Sidebar() {
 
       {/* Status footer */}
       <div className="border-t border-zinc-800 px-4 py-3">
-        <div className="flex items-center gap-2 text-xs text-zinc-500">
-          <span className="h-2 w-2 rounded-full bg-emerald-500" />
-          Connected
+        <div className="flex items-center justify-between text-xs text-zinc-500">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            Connected
+          </div>
+          {version && <span className="text-zinc-600">v{version}</span>}
         </div>
       </div>
     </aside>

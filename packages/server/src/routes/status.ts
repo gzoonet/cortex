@@ -1,5 +1,16 @@
 import { Router } from 'express';
 import type { ServerBundle } from '../index.js';
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+let _version = 'unknown';
+try {
+  // Walk up from dist/routes/ to find package.json
+  const here = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url));
+  const pkg = JSON.parse(readFileSync(resolve(here, '..', '..', '..', '..', 'package.json'), 'utf-8'));
+  _version = pkg.version ?? 'unknown';
+} catch { /* ignore */ }
 
 export function createStatusRoutes(bundle: ServerBundle): Router {
   const router = Router();

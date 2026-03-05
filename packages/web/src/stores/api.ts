@@ -90,6 +90,7 @@ export const api = {
 
 // Types matching API responses
 export interface StatusData {
+  version?: string;
   graph: {
     entityCount: number;
     relationshipCount: number;
