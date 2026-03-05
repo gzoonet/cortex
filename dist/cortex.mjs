@@ -7449,7 +7449,9 @@ function registerMcpCommand(program2) {
   program2.command("mcp").description("Start the Cortex MCP server (stdio transport for Claude Code)").option("--config-dir <path>", "Directory containing cortex.config.json").action(async (opts) => {
     const globals = program2.opts();
     const pkgRoot = findPackageRoot(import.meta.dirname);
-    const mcpEntry = resolve15(pkgRoot, "packages/mcp/dist/index.js");
+    const bundledMcp = resolve15(pkgRoot, "dist/cortex-mcp.mjs");
+    const workspaceMcp = resolve15(pkgRoot, "packages/mcp/dist/index.js");
+    const mcpEntry = existsSync7(bundledMcp) ? bundledMcp : workspaceMcp;
     if (!existsSync7(mcpEntry)) {
       console.error(chalk14.red("Error: MCP server not built."));
       console.error(chalk14.dim(`Expected: ${mcpEntry}`));

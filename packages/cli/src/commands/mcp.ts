@@ -28,7 +28,9 @@ export function registerMcpCommand(program: Command): void {
     .action(async (opts: { configDir?: string }) => {
       const globals = program.opts<GlobalOptions>();
       const pkgRoot = findPackageRoot(import.meta.dirname);
-      const mcpEntry = resolve(pkgRoot, 'packages/mcp/dist/index.js');
+      const bundledMcp = resolve(pkgRoot, 'dist/cortex-mcp.mjs');
+      const workspaceMcp = resolve(pkgRoot, 'packages/mcp/dist/index.js');
+      const mcpEntry = existsSync(bundledMcp) ? bundledMcp : workspaceMcp;
 
       if (!existsSync(mcpEntry)) {
         console.error(chalk.red('Error: MCP server not built.'));
