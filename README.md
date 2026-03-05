@@ -155,7 +155,7 @@ cortex config exclude add vendor         # exclude a directory from watching
 cortex privacy set ~/clients restricted  # mark directory as restricted
 ```
 
-Full configuration reference: [docs/config.md](docs/config.md)
+Full configuration reference: [docs/configuration.md](docs/configuration.md)
 
 ## Commands
 
@@ -181,7 +181,7 @@ Full configuration reference: [docs/config.md](docs/config.md)
 | `cortex config exclude add/remove/list` | Manage file/directory exclusions |
 | `cortex db` | Database operations |
 
-Full CLI reference: [docs/cli-commands.md](docs/cli-commands.md)
+Full CLI reference: [docs/cli-reference.md](docs/cli-reference.md)
 
 ## Web Dashboard
 
