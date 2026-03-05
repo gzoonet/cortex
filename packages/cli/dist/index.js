@@ -22,7 +22,7 @@ const program = new Command();
 program
     .name('cortex')
     .description('Local-first knowledge orchestrator — remembers what you decided, why, and where.')
-    .version('0.5.0')
+    .version('0.5.1')
     .option('--config <path>', 'Config file path')
     .option('--verbose', 'Show debug-level output', false)
     .option('--quiet', 'Suppress all non-error output', false)

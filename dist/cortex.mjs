@@ -6052,8 +6052,10 @@ async function runStatus(globals) {
     console.log(chalk5.bold.cyan("CORTEX STATUS"));
     console.log(chalk5.dim("\u2500".repeat(50)));
     console.log(chalk5.white("Graph:     ") + chalk5.bold(`${stats.entityCount.toLocaleString()}`) + " entities | " + chalk5.bold(`${stats.relationshipCount.toLocaleString()}`) + " relationships | " + chalk5.bold(`${stats.contradictionCount}`) + " contradictions");
-    const projectNames = projects.map((p) => p.name).join(", ") || "none";
-    console.log(chalk5.white("Projects:  ") + `${projects.length} watched (${projectNames})`);
+    console.log(chalk5.white("Projects:  ") + `${projects.length} watched`);
+    for (const p of projects) {
+      console.log(chalk5.dim(`           ${p.name} \u2192 ${p.rootPath}`));
+    }
     console.log(chalk5.white("Files:     ") + `${stats.fileCount} tracked`);
     console.log(chalk5.white("Storage:   ") + `${formatBytes(stats.dbSizeBytes)} (SQLite) | ${formatBytes(vectorSizeBytes)} (vectors)`);
     console.log("");
@@ -7845,7 +7847,7 @@ function registerRestartCommand(program2) {
 
 // packages/cli/dist/index.js
 var program = new Command();
-program.name("cortex").description("Local-first knowledge orchestrator \u2014 remembers what you decided, why, and where.").version("0.5.0").option("--config <path>", "Config file path").option("--verbose", "Show debug-level output", false).option("--quiet", "Suppress all non-error output", false).option("--json", "Output as JSON (for scripting)", false).option("--no-color", "Disable color output");
+program.name("cortex").description("Local-first knowledge orchestrator \u2014 remembers what you decided, why, and where.").version("0.5.1").option("--config <path>", "Config file path").option("--verbose", "Show debug-level output", false).option("--quiet", "Suppress all non-error output", false).option("--json", "Output as JSON (for scripting)", false).option("--no-color", "Disable color output");
 registerInitCommand(program);
 registerWatchCommand(program);
 registerQueryCommand(program);

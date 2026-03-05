@@ -113,9 +113,11 @@ async function runStatus(globals) {
             chalk.bold(`${stats.relationshipCount.toLocaleString()}`) + ' relationships | ' +
             chalk.bold(`${stats.contradictionCount}`) + ' contradictions');
         // Projects
-        const projectNames = projects.map((p) => p.name).join(', ') || 'none';
         console.log(chalk.white('Projects:  ') +
-            `${projects.length} watched (${projectNames})`);
+            `${projects.length} watched`);
+        for (const p of projects) {
+            console.log(chalk.dim(`           ${p.name} → ${p.rootPath}`));
+        }
         // Files
         console.log(chalk.white('Files:     ') +
             `${stats.fileCount} tracked`);
