@@ -57,7 +57,9 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
     }
 
     // Check LLM availability
-    const hasApiKey = Boolean(process.env['CORTEX_ANTHROPIC_API_KEY'] || process.env['ANTHROPIC_API_KEY']);
+    const apiKeySource = config.llm.cloud.apiKeySource;
+    const apiKeyEnvVar = apiKeySource.startsWith("env:") ? apiKeySource.slice(4) : undefined;
+    const hasApiKey = apiKeyEnvVar ? Boolean(process.env[apiKeyEnvVar]) : false;
     const mode = config.llm.mode;
     const ollamaAvailable = mode !== 'cloud-first' ? await checkOllamaAvailable(config.llm.local.host) : false;
 
@@ -90,7 +92,7 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
         llm: {
           mode: mode,
           cloud: {
-            provider: 'anthropic',
+            provider: config.llm.cloud.provider,
             available: hasApiKey,
           },
           local: {
@@ -231,7 +233,7 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
       statusOk = hasApiKey;
       statusMsg = hasApiKey
         ? '✓ Fully operational'
-        : '⚠ API key not set. Run `cortex init` or set CORTEX_ANTHROPIC_API_KEY.';
+        : '⚠ API key not set. Run `cortex init` or set ' + (apiKeyEnvVar ?? 'your cloud API key env var') + '.';
     }
 
     console.log(

@@ -20,11 +20,83 @@ function extractJson(raw: string): string {
   const endIdx = findMatchingClose(cleaned, startIdx, openChar, closeChar);
 
   if (endIdx === -1) {
+    // LLM response was truncated — try to repair
+    const repaired = repairTruncatedJson(cleaned.slice(startIdx));
+    if (repaired) return repaired;
     throw new Error('Unterminated JSON in response');
   }
 
   cleaned = cleaned.slice(startIdx, endIdx + 1);
   return cleaned;
+}
+
+
+/**
+ * Attempt to repair truncated JSON by closing open brackets/braces.
+ * Finds the last complete array element or object property, trims there,
+ * then closes all open structures.
+ */
+function repairTruncatedJson(truncated: string): string | null {
+  // Find the last complete value boundary (end of a complete JSON value)
+  // Look backwards for the last }, ], number, "string", true, false, null
+  // that's followed by a comma or is at the right nesting level
+  let lastGoodIdx = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  const openStack: string[] = [];
+
+  for (let i = 0; i < truncated.length; i++) {
+    const ch = truncated[i]!;
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\' && inString) { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+
+    if (ch === '{' || ch === '[') {
+      openStack.push(ch);
+      depth++;
+    } else if (ch === '}' || ch === ']') {
+      openStack.pop();
+      depth--;
+      if (depth >= 1) lastGoodIdx = i;
+    } else if (ch === ',' && depth >= 1) {
+      // A comma after a complete value — the value before this is safe
+      lastGoodIdx = i - 1;
+    }
+  }
+
+  if (lastGoodIdx <= 0) return null;
+
+  // Trim to last good position (skip any trailing comma)
+  let repaired = truncated.slice(0, lastGoodIdx + 1).trimEnd();
+  if (repaired.endsWith(',')) repaired = repaired.slice(0, -1);
+
+  // Count remaining open brackets/braces and close them
+  const remaining: string[] = [];
+  inString = false;
+  escaped = false;
+  for (let i = 0; i < repaired.length; i++) {
+    const ch = repaired[i]!;
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\' && inString) { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') remaining.push('}');
+    else if (ch === '[') remaining.push(']');
+    else if (ch === '}' || ch === ']') remaining.pop();
+  }
+
+  // Close in reverse order
+  repaired += remaining.reverse().join('');
+
+  // Validate it parses
+  try {
+    JSON.parse(repaired);
+    return repaired;
+  } catch {
+    return null;
+  }
 }
 
 function findJsonStart(s: string): number {
