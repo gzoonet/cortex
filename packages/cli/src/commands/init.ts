@@ -293,7 +293,13 @@ function writeEnvFile(key: string, value: string): void {
 
 function writeConfig(config: Record<string, unknown> | ReturnType<typeof getDefaultConfig>, globals: GlobalOptions): void {
   const validated = cortexConfigSchema.parse(config);
-  const configPath = resolve(process.cwd(), 'cortex.config.json');
+  const cortexDir = join(homedir(), '.cortex');
+  if (!existsSync(cortexDir)) {
+    mkdirSync(cortexDir, { recursive: true });
+  }
+  const configPath = globals.config
+    ? resolve(globals.config, 'cortex.config.json')
+    : join(cortexDir, 'cortex.config.json');
   writeFileSync(configPath, JSON.stringify(validated, null, 2), { mode: 0o600 });
 
   if (!globals.quiet) {
