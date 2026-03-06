@@ -12,10 +12,11 @@ export function createContradictionRoutes(bundle: ServerBundle): Router {
   // GET /contradictions
   router.get('/', async (req, res) => {
     try {
-      const { status, severity, limit = '50' } = req.query;
+      const { status, severity, limit: rawLimit = '50' } = req.query;
+      const parsedLimit = Math.max(1, Math.min(Number(rawLimit) || 50, 500));
       const contradictions = await store.findContradictions({
         status: status as Contradiction['status'] | undefined,
-        limit: Number(limit),
+        limit: parsedLimit,
       });
 
       // Filter by severity client-side (store doesn't support severity filter)

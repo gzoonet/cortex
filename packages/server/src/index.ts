@@ -47,8 +47,21 @@ export async function startServer(options: ServerOptions): Promise<void> {
   const app = express();
   const server = createServer(app);
 
-  // Middleware
-  app.use(cors({ origin: config.server?.cors ?? ['http://localhost:*', 'http://127.0.0.1:*'] }));
+  // Middleware — CORS
+  const corsOrigin = config.server?.cors ?? [];
+  app.use(cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (curl, server-to-server)
+      if (!origin) return callback(null, true);
+      // Check explicit whitelist first
+      if (corsOrigin.includes(origin)) return callback(null, true);
+      // Allow any localhost/127.0.0.1 origin (any port)
+      if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+        return callback(null, true);
+      }
+      callback(new Error('CORS not allowed'));
+    },
+  }));
   app.use(express.json());
 
   // Warn if non-localhost without auth

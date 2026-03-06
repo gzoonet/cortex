@@ -11,19 +11,20 @@ export function createRelationshipRoutes(bundle: ServerBundle): Router {
   // GET /relationships — list/filter
   router.get('/', async (req, res) => {
     try {
-      const { type, sourceId, targetId, limit = '100' } = req.query;
+      const { type, sourceId, targetId, limit: rawLimit = '100' } = req.query;
+      const parsedLimit = Math.max(1, Math.min(Number(rawLimit) || 100, 500));
 
       if (sourceId && typeof sourceId === 'string') {
         const rels = await store.getRelationshipsForEntity(sourceId, 'out');
         const filtered = type ? rels.filter(r => r.type === type) : rels;
-        res.json({ success: true, data: filtered.slice(0, Number(limit)) });
+        res.json({ success: true, data: filtered.slice(0, parsedLimit) });
         return;
       }
 
       if (targetId && typeof targetId === 'string') {
         const rels = await store.getRelationshipsForEntity(targetId, 'in');
         const filtered = type ? rels.filter(r => r.type === type) : rels;
-        res.json({ success: true, data: filtered.slice(0, Number(limit)) });
+        res.json({ success: true, data: filtered.slice(0, parsedLimit) });
         return;
       }
 

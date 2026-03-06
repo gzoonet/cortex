@@ -57,10 +57,11 @@ export function createStatusRoutes(bundle: ServerBundle): Router {
   // GET /graph — graph visualization data (nodes + edges)
   router.get('/graph', (req, res) => {
     try {
-      const { project, limit = '2000' } = req.query;
+      const { project, limit: rawLimit = '2000' } = req.query;
+      const parsedLimit = Math.max(1, Math.min(Number(rawLimit) || 2000, 10000));
       const data = store.getGraphData({
         projectId: project as string | undefined,
-        limit: Number(limit),
+        limit: parsedLimit,
       });
       res.json({ success: true, data });
     } catch (err) {

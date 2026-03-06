@@ -72,6 +72,14 @@ function resolveApiKeySource(source: string): string | undefined {
   if (source.startsWith('env:')) {
     return process.env[source.slice(4)];
   }
+  // Warn if a raw key was provided instead of a reference format
+  if (source && !source.startsWith('keychain:') && !source.startsWith('file:')) {
+    logger.warn(
+      'apiKeySource appears to be a raw key. Use "env:VAR_NAME" format instead. ' +
+      'Raw keys in config files are a security risk.',
+    );
+    return source;
+  }
   return undefined;
 }
 
@@ -83,6 +91,8 @@ export class Router {
   private tracker: TokenTracker;
   private cache: ResponseCache;
   private config: CortexConfig;
+  private availabilityCache: { result: boolean; expiresAt: number } | null = null;
+  private static readonly AVAILABILITY_TTL_MS = 60_000; // 1 minute
 
   constructor(options: RouterOptions) {
     const { config } = options;
@@ -592,17 +602,29 @@ export class Router {
   }
 
   async isAvailable(): Promise<boolean> {
-    // Check based on mode
+    // Return cached result if still valid
+    if (this.availabilityCache && Date.now() < this.availabilityCache.expiresAt) {
+      return this.availabilityCache.result;
+    }
+
+    let result: boolean;
     switch (this.mode) {
       case 'local-only':
-        return this.localProvider?.isAvailable() ?? false;
+        result = await this.localProvider?.isAvailable() ?? false;
+        break;
       case 'cloud-first':
-        return this.cloudProvider?.isAvailable() ?? false;
-      default:
+        result = await this.cloudProvider?.isAvailable() ?? false;
+        break;
+      default: {
         // hybrid or local-first: either provider works
         const localAvailable = await this.localProvider?.isAvailable() ?? false;
         const cloudAvailable = await this.cloudProvider?.isAvailable() ?? false;
-        return localAvailable || cloudAvailable;
+        result = localAvailable || cloudAvailable;
+        break;
+      }
     }
+
+    this.availabilityCache = { result, expiresAt: Date.now() + Router.AVAILABILITY_TTL_MS };
+    return result;
   }
 }
