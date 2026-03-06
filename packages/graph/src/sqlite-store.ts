@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
-import { copyFileSync, statSync, mkdirSync } from 'node:fs';
+import { copyFileSync, statSync, mkdirSync, chmodSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import type {
@@ -296,6 +296,7 @@ export class SQLiteStore implements GraphStore {
       if (stat.isFile()) {
         const backupPath = `${this.dbPath}.backup`;
         copyFileSync(this.dbPath, backupPath);
+        try { chmodSync(backupPath, 0o600); } catch { /* Windows — ignore */ }
       }
     } catch {
       // DB doesn't exist yet — no backup needed
@@ -950,6 +951,7 @@ export class SQLiteStore implements GraphStore {
   async backup(): Promise<string> {
     const backupPath = `${this.dbPath}.backup-${Date.now()}`;
     await this.db.backup(backupPath);
+    try { chmodSync(backupPath, 0o600); } catch { /* Windows — ignore */ }
     return backupPath;
   }
 

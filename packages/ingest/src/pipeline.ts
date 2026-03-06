@@ -1,5 +1,5 @@
-import { readFileSync, statSync } from 'node:fs';
-import { relative, extname } from 'node:path';
+import { readFileSync, statSync, realpathSync } from 'node:fs';
+import { relative, extname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import {
   eventBus,
@@ -62,6 +62,23 @@ export class IngestionPipeline {
   }
 
   async ingestFile(filePath: string): Promise<PipelineResult> {
+    // Resolve symlinks and verify the real path is within the project root
+    try {
+      const realPath = realpathSync(filePath);
+      const projectRoot = resolve(this.options.projectRoot);
+      const rel = relative(projectRoot, realPath);
+      if (rel.startsWith('..') || resolve(realPath) !== resolve(projectRoot, rel)) {
+        logger.warn('Symlink traversal blocked — file resolves outside project root', {
+          filePath,
+          realPath,
+          projectRoot,
+        });
+        return { fileId: '', entityIds: [], relationshipIds: [], status: 'skipped', error: 'Outside project root' };
+      }
+    } catch {
+      // realpathSync failed — file may not exist yet, let downstream handle it
+    }
+
     const ext = extname(filePath).slice(1).toLowerCase();
 
     // Quick extension check — skip entirely unsupported types before reading

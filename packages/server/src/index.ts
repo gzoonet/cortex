@@ -74,13 +74,36 @@ export async function startServer(options: ServerOptions): Promise<void> {
     );
   }
 
+  // Simple in-memory rate limiter for LLM-backed endpoints
+  const rateLimitWindow = 60_000; // 1 minute
+  const rateLimitMax = 30; // max requests per window
+  const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+  const rateLimiter: express.RequestHandler = (req, res, next) => {
+    const key = req.ip ?? 'unknown';
+    const now = Date.now();
+    const entry = rateLimitMap.get(key);
+    if (!entry || now >= entry.resetAt) {
+      rateLimitMap.set(key, { count: 1, resetAt: now + rateLimitWindow });
+      return next();
+    }
+    entry.count++;
+    if (entry.count > rateLimitMax) {
+      res.status(429).json({
+        success: false,
+        error: { code: 'RATE_LIMITED', message: 'Too many requests. Try again later.' },
+      });
+      return;
+    }
+    next();
+  };
+
   // API routes
   const api = express.Router();
   api.use(createAuthMiddleware({ config, host }));
   api.use('/entities', createEntityRoutes(bundle));
   api.use('/relationships', createRelationshipRoutes(bundle));
   api.use('/projects', createProjectRoutes(bundle));
-  api.use('/query', createQueryRoutes(bundle));
+  api.use('/query', rateLimiter, createQueryRoutes(bundle));
   api.use('/contradictions', createContradictionRoutes(bundle));
   api.use('/', createStatusRoutes(bundle));
   app.use('/api/v1', api);

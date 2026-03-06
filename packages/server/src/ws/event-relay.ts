@@ -55,14 +55,20 @@ export function createEventRelay(server: Server, config?: CortexConfig, host?: s
   // Subscribe to EventBus events and relay to all connected WebSocket clients
   for (const eventType of RELAYED_EVENTS) {
     const unsub = eventBus.on(eventType, (event) => {
+      // Strip sensitive fields from LLM events before broadcasting
+      let payload = event.payload;
+      if (eventType === 'llm.request.complete' && payload && typeof payload === 'object') {
+        const { usage, ...safe } = payload as Record<string, unknown>;
+        payload = safe;
+      }
+
       const message = JSON.stringify({
         type: 'event',
         channel: eventType,
         event: {
           type: event.type,
-          payload: event.payload,
+          payload,
           timestamp: event.timestamp,
-          source: event.source,
         },
       });
 

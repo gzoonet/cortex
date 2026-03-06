@@ -6,7 +6,7 @@ const logger = createLogger('server:query');
 
 export function createQueryRoutes(bundle: ServerBundle): Router {
   const router = Router();
-  const { queryEngine, router: llmRouter } = bundle;
+  const { store, queryEngine, router: llmRouter } = bundle;
 
   // POST /query
   router.post('/', async (req, res) => {
@@ -20,6 +20,15 @@ export function createQueryRoutes(bundle: ServerBundle): Router {
       if (!query || typeof query !== 'string') {
         res.status(400).json({ success: false, error: { code: 'BAD_REQUEST', message: 'query is required' } });
         return;
+      }
+
+      // Validate projectId exists if provided
+      if (projectId && typeof projectId === 'string') {
+        const project = await store.getProject(projectId);
+        if (!project) {
+          res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Project not found' } });
+          return;
+        }
       }
 
       // Assemble context from knowledge graph
