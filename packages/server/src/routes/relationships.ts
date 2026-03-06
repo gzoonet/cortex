@@ -1,5 +1,8 @@
 import { Router } from 'express';
+import { createLogger } from '@cortex/core';
 import type { ServerBundle } from '../index.js';
+
+const logger = createLogger('server:relationships');
 
 export function createRelationshipRoutes(bundle: ServerBundle): Router {
   const router = Router();
@@ -30,7 +33,8 @@ export function createRelationshipRoutes(bundle: ServerBundle): Router {
         meta: { message: 'Provide sourceId or targetId to query relationships' },
       });
     } catch (err) {
-      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: String(err) } });
+      logger.error('Request failed', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
     }
   });
 
@@ -44,7 +48,8 @@ export function createRelationshipRoutes(bundle: ServerBundle): Router {
       }
       res.json({ success: true, data: rel });
     } catch (err) {
-      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: String(err) } });
+      logger.error('Request failed', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
     }
   });
 

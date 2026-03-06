@@ -1,5 +1,8 @@
 import { Router } from 'express';
+import { createLogger } from '@cortex/core';
 import type { ServerBundle } from '../index.js';
+
+const logger = createLogger('server:projects');
 
 export function createProjectRoutes(bundle: ServerBundle): Router {
   const router = Router();
@@ -11,7 +14,8 @@ export function createProjectRoutes(bundle: ServerBundle): Router {
       const projects = await store.listProjects();
       res.json({ success: true, data: projects });
     } catch (err) {
-      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: String(err) } });
+      logger.error('Request failed', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
     }
   });
 
@@ -25,7 +29,8 @@ export function createProjectRoutes(bundle: ServerBundle): Router {
       }
       res.json({ success: true, data: project });
     } catch (err) {
-      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: String(err) } });
+      logger.error('Request failed', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
     }
   });
 

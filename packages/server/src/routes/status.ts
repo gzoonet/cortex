@@ -1,6 +1,9 @@
 import { Router } from 'express';
+import { createLogger } from '@cortex/core';
 import type { ServerBundle } from '../index.js';
 import { readFileSync } from 'node:fs';
+
+const logger = createLogger('server:status');
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -46,7 +49,8 @@ export function createStatusRoutes(bundle: ServerBundle): Router {
         },
       });
     } catch (err) {
-      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: String(err) } });
+      logger.error('Request failed', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
     }
   });
 
@@ -60,7 +64,8 @@ export function createStatusRoutes(bundle: ServerBundle): Router {
       });
       res.json({ success: true, data });
     } catch (err) {
-      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: String(err) } });
+      logger.error('Request failed', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
     }
   });
 
@@ -70,7 +75,8 @@ export function createStatusRoutes(bundle: ServerBundle): Router {
       const data = store.getReportData();
       res.json({ success: true, data });
     } catch (err) {
-      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: String(err) } });
+      logger.error('Request failed', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
     }
   });
 

@@ -543,27 +543,28 @@ export class SQLiteStore implements GraphStore {
     deletedRelationships: number;
     deletedFiles: number;
   } {
-    // Normalize to backslashes (Windows DB storage) and add wildcard
+    // Normalize to backslashes (Windows DB storage), escape LIKE wildcards, then add wildcard
     const normalized = pathPrefix.replace(/\//g, '\\');
-    const pattern = normalized.endsWith('%') ? normalized : normalized + '%';
+    const escaped = normalized.replace(/[%_\\]/g, '\\$&');
+    const pattern = escaped + '%';
     return this.db.transaction(() => {
       const relResult = this.db.prepare(`
         DELETE FROM relationships
-        WHERE source_entity_id IN (SELECT id FROM entities WHERE source_file LIKE ?)
-           OR target_entity_id IN (SELECT id FROM entities WHERE source_file LIKE ?)
+        WHERE source_entity_id IN (SELECT id FROM entities WHERE source_file LIKE ? ESCAPE '\\')
+           OR target_entity_id IN (SELECT id FROM entities WHERE source_file LIKE ? ESCAPE '\\')
       `).run(pattern, pattern);
 
       this.db.prepare(`
         DELETE FROM entities_fts
-        WHERE rowid IN (SELECT rowid FROM entities WHERE source_file LIKE ? AND deleted_at IS NULL)
+        WHERE rowid IN (SELECT rowid FROM entities WHERE source_file LIKE ? ESCAPE '\\' AND deleted_at IS NULL)
       `).run(pattern);
 
       const entityResult = this.db.prepare(
-        'DELETE FROM entities WHERE source_file LIKE ?',
+        "DELETE FROM entities WHERE source_file LIKE ? ESCAPE '\\'",
       ).run(pattern);
 
       const fileResult = this.db.prepare(
-        'DELETE FROM files WHERE path LIKE ?',
+        "DELETE FROM files WHERE path LIKE ? ESCAPE '\\'",
       ).run(pattern);
 
       return {
@@ -773,13 +774,17 @@ export class SQLiteStore implements GraphStore {
   // --- Search ---
 
   async searchEntities(text: string, limit = 20): Promise<Entity[]> {
+    // Sanitize input: strip FTS5 operators to prevent injection via MATCH syntax
+    const sanitized = text.replace(/[^a-zA-Z0-9\s]/g, ' ').trim();
+    if (!sanitized) return [];
+
     const rows = this.db.prepare(`
       SELECT e.* FROM entities e
       JOIN entities_fts fts ON fts.rowid = e.rowid
       WHERE fts.entities_fts MATCH ? AND e.deleted_at IS NULL
       ORDER BY rank
       LIMIT ?
-    `).all(text, limit) as EntityRow[];
+    `).all(sanitized, limit) as EntityRow[];
 
     return rows.map(rowToEntity);
   }

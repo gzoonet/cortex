@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import type { Contradiction } from '@cortex/core';
+import { createLogger } from '@cortex/core';
 import type { ServerBundle } from '../index.js';
+
+const logger = createLogger('server:contradictions');
 
 export function createContradictionRoutes(bundle: ServerBundle): Router {
   const router = Router();
@@ -33,7 +36,8 @@ export function createContradictionRoutes(bundle: ServerBundle): Router {
 
       res.json({ success: true, data: enriched, meta: { total: enriched.length } });
     } catch (err) {
-      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: String(err) } });
+      logger.error('Request failed', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
     }
   });
 
@@ -59,7 +63,8 @@ export function createContradictionRoutes(bundle: ServerBundle): Router {
 
       res.json({ success: true, data: { id: req.params.id, status: 'resolved', action } });
     } catch (err) {
-      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: String(err) } });
+      logger.error('Request failed', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: 'Internal server error' } });
     }
   });
 

@@ -1,6 +1,8 @@
 import { Router } from 'express';
-import { LLMTask } from '@cortex/core';
+import { LLMTask, createLogger } from '@cortex/core';
 import type { ServerBundle } from '../index.js';
+
+const logger = createLogger('server:query');
 
 export function createQueryRoutes(bundle: ServerBundle): Router {
   const router = Router();
@@ -75,7 +77,8 @@ export function createQueryRoutes(bundle: ServerBundle): Router {
         },
       });
     } catch (err) {
-      res.status(500).json({ success: false, error: { code: 'QUERY_FAILED', message: String(err) } });
+      logger.error('Query failed', { error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ success: false, error: { code: 'QUERY_FAILED', message: 'Query processing failed' } });
     }
   });
 
