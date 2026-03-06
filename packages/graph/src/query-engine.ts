@@ -72,11 +72,14 @@ export class QueryEngine {
       totalTokens += entityTokens;
     }
 
+    // Filter entities by project privacy level
+    const privacyFiltered = await this.filterByPrivacy(contextEntities);
+
     // Gather relationships between context entities
-    const entityIds = new Set(contextEntities.map((e) => e.id));
+    const entityIds = new Set(privacyFiltered.map((e) => e.id));
     const relationships: Relationship[] = [];
 
-    for (const entity of contextEntities) {
+    for (const entity of privacyFiltered) {
       const rels = await this.sqliteStore.getRelationshipsForEntity(entity.id);
       for (const rel of rels) {
         if (entityIds.has(rel.sourceEntityId) && entityIds.has(rel.targetEntityId)) {
@@ -93,17 +96,66 @@ export class QueryEngine {
       0,
     );
 
+    // Recalculate tokens after privacy filtering (content may have been redacted)
+    const filteredTokens = privacyFiltered.reduce(
+      (sum, e) => sum + estimateTokens(e.content) + estimateTokens(e.name),
+      0,
+    );
+
     logger.debug('Context assembled', {
-      entities: contextEntities.length,
+      entities: privacyFiltered.length,
+      entitiesFiltered: contextEntities.length - privacyFiltered.length,
       relationships: uniqueRels.length,
-      totalTokensEstimate: totalTokens + relTokens,
+      totalTokensEstimate: filteredTokens + relTokens,
     });
 
     return {
-      entities: contextEntities,
+      entities: privacyFiltered,
       relationships: uniqueRels,
-      totalTokensEstimate: totalTokens + relTokens,
+      totalTokensEstimate: filteredTokens + relTokens,
     };
+  }
+
+  private async filterByPrivacy(entities: Entity[]): Promise<Entity[]> {
+    if (entities.length === 0) return entities;
+
+    // Batch-fetch unique project IDs to avoid N+1 queries
+    const projectIds = [...new Set(entities.map((e) => e.projectId))];
+    const projectPrivacy = new Map<string, string>();
+
+    for (const pid of projectIds) {
+      const project = await this.sqliteStore.getProject(pid);
+      if (project) {
+        projectPrivacy.set(pid, project.privacyLevel);
+      }
+    }
+
+    const filtered: Entity[] = [];
+    let excluded = 0;
+    let redacted = 0;
+
+    for (const entity of entities) {
+      const level = projectPrivacy.get(entity.projectId) ?? 'standard';
+
+      if (level === 'restricted') {
+        excluded++;
+        continue;
+      }
+
+      if (level === 'sensitive') {
+        redacted++;
+        filtered.push({ ...entity, content: '[REDACTED]', properties: {} });
+        continue;
+      }
+
+      filtered.push(entity);
+    }
+
+    if (excluded > 0 || redacted > 0) {
+      logger.info('Privacy filter applied', { excluded, redacted, kept: filtered.length });
+    }
+
+    return filtered;
   }
 
   /**

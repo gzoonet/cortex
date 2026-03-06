@@ -30,7 +30,7 @@ Classification is per-directory, inherited by files. Most restrictive wins.
 If any check fails critically, the request is **blocked** (not queued, not retried to cloud).
 
 > **Implementation status:**
-> - Step 1 (privacy check): Enforced during ingestion pipeline only. **Not yet enforced on query/MCP paths** — entities from restricted projects can be returned via REST API or MCP queries. See [issue #2](https://github.com/gzoonet/cortex/issues/2).
+> - Step 1 (privacy check): Enforced during ingestion and query paths. `restricted` entities are excluded from query context entirely. `sensitive` entities have their `content` redacted to `[REDACTED]` before being sent to cloud LLMs. Applies to all query entry points (REST API, CLI, MCP).
 > - Step 2 (secret scan): `secretPatterns` are defined in config but **not applied** before cloud transmission. Planned.
 > - Step 3 (PII detection): Planned for future release.
 > - Step 4 (size validation): Not yet implemented.
