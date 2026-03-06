@@ -12,6 +12,7 @@ import { createQueryRoutes } from './routes/query.js';
 import { createContradictionRoutes } from './routes/contradictions.js';
 import { createStatusRoutes } from './routes/status.js';
 import { createEventRelay } from './ws/event-relay.js';
+import { createAuthMiddleware } from './middleware/auth.js';
 
 const logger = createLogger('server');
 
@@ -50,8 +51,19 @@ export async function startServer(options: ServerOptions): Promise<void> {
   app.use(cors({ origin: config.server?.cors ?? ['http://localhost:*', 'http://127.0.0.1:*'] }));
   app.use(express.json());
 
+  // Warn if non-localhost without auth
+  const isLocal = host === '127.0.0.1' || host === 'localhost' || host === '::1';
+  if (!isLocal && !config.server.auth.enabled) {
+    logger.warn(
+      'Server bound to non-localhost without auth enabled. ' +
+      'Set server.auth.enabled=true and server.auth.token in config, ' +
+      'or set CORTEX_SERVER_AUTH_TOKEN env var.',
+    );
+  }
+
   // API routes
   const api = express.Router();
+  api.use(createAuthMiddleware({ config, host }));
   api.use('/entities', createEntityRoutes(bundle));
   api.use('/relationships', createRelationshipRoutes(bundle));
   api.use('/projects', createProjectRoutes(bundle));
@@ -61,7 +73,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
   app.use('/api/v1', api);
 
   // WebSocket event relay
-  const relay = createEventRelay(server);
+  const relay = createEventRelay(server, config, host);
   logger.info('WebSocket relay attached', { path: '/ws' });
 
   // Serve static web dashboard if available

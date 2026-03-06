@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
-import { eventBus, createLogger } from '@cortex/core';
+import { type CortexConfig, eventBus, createLogger } from '@cortex/core';
+import { validateWsToken } from '../middleware/auth.js';
 
 const logger = createLogger('server:ws');
 
@@ -22,11 +23,17 @@ export interface EventRelayHandle {
   close: () => void;
 }
 
-export function createEventRelay(server: Server): EventRelayHandle {
+export function createEventRelay(server: Server, config?: CortexConfig, host?: string): EventRelayHandle {
   const wss = new WebSocketServer({ server, path: '/ws' });
   const unsubscribers: Array<() => void> = [];
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
+    if (config && host && !validateWsToken(config, host, req.url)) {
+      ws.close(4401, 'Authentication required');
+      logger.warn('WebSocket connection rejected — invalid or missing token');
+      return;
+    }
+
     logger.debug('WebSocket client connected');
 
     ws.on('message', (raw) => {

@@ -11,6 +11,9 @@
 Classification is per-directory, inherited by files. Most restrictive wins.
 
 ### Auto-Classification (always upgrades, never downgrades)
+
+> **Status: Planned.** Auto-classification is not yet implemented. Files matching these patterns are excluded from ingestion (see Auto-Excluded list below), but privacy levels are not automatically assigned based on file type. Use `cortex privacy set <dir> <level>` to classify manually.
+
 - `.env*`, `*.pem`, `*.key` → `restricted`
 - `*.sqlite`, `*.db` → `sensitive`
 - `docker-compose*.yml` with env vars → `sensitive`
@@ -21,10 +24,16 @@ Classification is per-directory, inherited by files. Most restrictive wins.
 
 1. **Privacy check:** Is content from restricted/sensitive directory? → Block or redact
 2. **Secret scan:** Regex patterns for AWS keys, Anthropic keys, GitHub tokens, passwords, connection strings → Replace with `[SECRET_REDACTED]`
-3. **PII detection (Phase 3):** Email, phone, SSN, credit card patterns → Replace with `[PII_REDACTED]`
+3. **PII detection:** Email, phone, SSN, credit card patterns → Replace with `[PII_REDACTED]`
 4. **Size validation:** Max 50KB payload per request
 
 If any check fails critically, the request is **blocked** (not queued, not retried to cloud).
+
+> **Implementation status:**
+> - Step 1 (privacy check): Enforced during ingestion pipeline only. **Not yet enforced on query/MCP paths** — entities from restricted projects can be returned via REST API or MCP queries. See [issue #2](https://github.com/gzoonet/cortex/issues/2).
+> - Step 2 (secret scan): `secretPatterns` are defined in config but **not applied** before cloud transmission. Planned.
+> - Step 3 (PII detection): Planned for future release.
+> - Step 4 (size validation): Not yet implemented.
 
 ## Sensitive Content Redaction
 
@@ -42,7 +51,9 @@ interface RedactedEntity {
 
 ## Transmission Logging
 
-Every cloud API call is logged to `~/.cortex/transmission.log` (chmod 600):
+> **Status: Planned.** Transmission logging is not yet implemented. The `cortex privacy log` command exists but returns empty results. The interface below describes the target design.
+
+Every cloud API call will be logged to `~/.cortex/transmission.log` (chmod 600):
 
 ```typescript
 interface TransmissionLogEntry {
@@ -60,7 +71,7 @@ interface TransmissionLogEntry {
 }
 ```
 
-Viewable via `cortex privacy log`.
+Will be viewable via `cortex privacy log`.
 
 ## File System Security
 
@@ -68,11 +79,14 @@ Viewable via `cortex privacy log`.
 `node_modules/`, `.git/objects/`, `dist/`, `build/`, `out/`, `.env*`, `*.key`, `*.pem`, `*.min.js`, `*.min.css`, `package-lock.json`, `yarn.lock`, `__pycache__/`, `*.pyc`, `.DS_Store`, `Thumbs.db`, `~/.cortex/*.db`
 
 ### Permissions
-- `~/.cortex/` directory: `700`
-- `cortex.db`: `600`
-- `cortex.config.json`: `600`
-- `transmission.log`: `600`
-- Log files: `600`
+
+> **Status: Partially implemented.** `cortex.config.json` is written with `600` permissions. Directory and DB permissions are not yet explicitly set — they inherit from umask. Backup files (`cortex.db.backup`) do not have explicit permissions. See [issue #12](https://github.com/gzoonet/cortex/issues/12).
+
+- `~/.cortex/` directory: `700` *(planned)*
+- `cortex.db`: `600` *(planned)*
+- `cortex.config.json`: `600` *(implemented)*
+- `transmission.log`: `600` *(planned — logging not yet implemented)*
+- Log files: `600` *(planned)*
 
 ### Resource Limits
 - Max file size: 10MB (configurable)
@@ -92,17 +106,23 @@ Viewable via `cortex privacy log`.
 ### Zero telemetry
 No analytics, no update checks, no phone-home. Ever.
 
-### Inbound (Phase 3)
+### Inbound
 - REST API: `127.0.0.1:3710` (localhost only by default)
 - WebSocket: `127.0.0.1:3710`
-- If `server.host` changed from localhost: require `server.auth.enabled = true`
+- **Authentication:** Bearer token auth on all `/api/v1/*` routes and WebSocket connections. Enforced automatically when `server.host` is non-localhost. Can be enabled explicitly via `server.auth.enabled = true` or `CORTEX_SERVER_AUTH_TOKEN` env var. Tokens are compared using `timingSafeEqual`. When serving on a non-localhost host without a configured token, one is auto-generated and saved to `~/.cortex/.env`.
+- WebSocket auth uses query string: `ws://host:port/ws?token=<token>`
+- No rate limiting on API endpoints yet. See [issue #9](https://github.com/gzoonet/cortex/issues/9).
 
 ## API Key Management
 
 Priority: OS Keychain > Environment Variable > File reference > Raw in config (warn)
 
-On startup: validate API key with minimal API call. Exit code 4 if invalid.
-If raw key detected in config: warn on every startup, offer migration to env var.
+> **Implementation status:**
+> - `env:VAR_NAME` format: Implemented and recommended.
+> - OS Keychain (`keychain:ENTRY`): Planned for future release.
+> - File reference (`file:PATH`): Planned for future release.
+> - Raw key detection/warning: Not yet implemented. Raw keys in `apiKeySource` silently fail (return `undefined`). See [issue #15](https://github.com/gzoonet/cortex/issues/15).
+> - Startup API key validation via minimal API call: Implemented in `isAvailable()`, but this incurs real API cost on every call without caching. See [issue #11](https://github.com/gzoonet/cortex/issues/11).
 
 ## Prompt Injection Mitigation
 

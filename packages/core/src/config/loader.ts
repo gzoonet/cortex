@@ -99,6 +99,12 @@ function applyEnvOverrides(config: CortexConfigInput): CortexConfigInput {
     const local = { ...config.llm?.local, host: env['CORTEX_OLLAMA_HOST'] };
     config.llm = { ...config.llm, local };
   }
+  if (env['CORTEX_SERVER_AUTH_TOKEN']) {
+    config.server = {
+      ...config.server,
+      auth: { ...config.server?.auth, enabled: true, token: env['CORTEX_SERVER_AUTH_TOKEN'] },
+    };
+  }
 
   return config;
 }
@@ -116,7 +122,15 @@ export function loadConfig(options: LoadConfigOptions = {}): CortexConfig {
   const { configDir, overrides, requireFile = false } = options;
 
   let fileConfig: Record<string, unknown> = {};
-  const configPath = findConfigFile(configDir);
+
+  // When requireFile + configDir, only check that specific directory
+  let configPath: string | null;
+  if (requireFile && configDir) {
+    const candidate = resolve(configDir, CONFIG_FILENAME);
+    configPath = existsSync(candidate) ? candidate : null;
+  } else {
+    configPath = findConfigFile(configDir);
+  }
 
   if (configPath) {
     fileConfig = readConfigFile(configPath);

@@ -85,10 +85,16 @@ export interface PrivacyConfig {
   secretPatterns: string[];
 }
 
+export interface ServerAuthConfig {
+  enabled: boolean;
+  token?: string;
+}
+
 export interface ServerConfig {
   port: number;
   host: string;
   cors: string[];
+  auth: ServerAuthConfig;
 }
 
 export interface LoggingConfig {

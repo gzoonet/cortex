@@ -94,7 +94,11 @@
   "server": {
     "port": 3710,
     "host": "127.0.0.1",
-    "cors": ["http://localhost:5173"]
+    "cors": ["http://localhost:5173"],
+    "auth": {
+      "enabled": false,
+      "token": ""
+    }
   },
   "logging": {
     "level": "info",
@@ -118,6 +122,7 @@
 | `CORTEX_LOG_LEVEL` | `logging.level` | `debug` |
 | `CORTEX_BUDGET_LIMIT` | `llm.budget.monthlyLimitUsd` | `50` |
 | `CORTEX_OLLAMA_HOST` | `llm.local.host` | `http://gpu-box:11434` |
+| `CORTEX_SERVER_AUTH_TOKEN` | `server.auth.token` (also enables auth) | `my-secret-token` |
 | `CORTEX_CONFIG_PATH` | Config file location | `/etc/cortex/config.json` |
 
 ## API Key Source Formats
@@ -130,7 +135,7 @@
 ## Cross-Field Validation Rules
 
 1. If `llm.mode` is `cloud-first` or `hybrid`, cloud API key must be configured
-2. If `server.host` is not `127.0.0.1`, `server.auth.enabled` must be `true`
+2. If `server.host` is not `127.0.0.1`, auth is automatically enforced (warning logged if `server.auth.enabled` is not explicitly set). A token is auto-generated and saved to `~/.cortex/.env` if none is configured.
 3. If `llm.maxContextTokens` > model's context window, auto-reduce with warning
 4. If `llm.mode` is `local-only` and budget > 0, info message (no error)
 

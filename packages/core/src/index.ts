@@ -39,6 +39,8 @@ export {
   CONFIG_INVALID,
   CONFIG_MISSING,
   INTERFACE_PORT_IN_USE,
+  SERVER_AUTH_REQUIRED,
+  SERVER_AUTH_INVALID,
 } from './errors/cortex-error.js';
 
 // EventBus

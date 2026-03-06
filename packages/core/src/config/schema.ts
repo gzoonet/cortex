@@ -103,10 +103,16 @@ export const privacyConfigSchema = z.object({
   ]),
 });
 
+export const serverAuthSchema = z.object({
+  enabled: z.boolean().default(false),
+  token: z.string().optional(),
+});
+
 export const serverConfigSchema = z.object({
   port: z.number().int().min(1).max(65535).default(3710),
   host: z.string().default('127.0.0.1'),
   cors: z.array(z.string()).default(['http://localhost:5173']),
+  auth: serverAuthSchema.default({}),
 });
 
 export const loggingConfigSchema = z.object({

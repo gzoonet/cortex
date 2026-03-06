@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { resolve } from 'node:path';
 import { statSync } from 'node:fs';
 import chalk from 'chalk';
-import { loadConfig, createLogger } from '@cortex/core';
+import { loadConfig, createLogger, setGlobalLogLevel } from '@cortex/core';
 import { SQLiteStore } from '@cortex/graph';
 import { Router } from '@cortex/llm';
 import type { GlobalOptions } from '../index.js';
@@ -62,6 +62,9 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
     const hasApiKey = apiKeyEnvVar ? Boolean(process.env[apiKeyEnvVar]) : false;
     const mode = config.llm.mode;
     const ollamaAvailable = mode !== 'cloud-first' ? await checkOllamaAvailable(config.llm.local.host) : false;
+
+    // Suppress log output in JSON mode so Router init logs don't pollute stdout
+    if (globals.json) setGlobalLogLevel('error');
 
     // Compute local savings estimate: tokens processed by Ollama × Haiku cloud rate
     const router = new Router({ config });
