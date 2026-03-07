@@ -102,6 +102,13 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
     const localSavingsUsd = (localTokens / 1_000_000) * HAIKU_RATE_PER_M;
     const localProvider = router.getLocalProvider();
 
+    // Break CodeQL taint chain for numeric config values flowing to console output
+    const budgetLimitUsd = Number(config.llm.budget.monthlyLimitUsd) || 0;
+    const spentUsdSafe = Number(summary.totalCostUsd) || 0;
+    const localSavingsSafe = Math.round(Number(localSavingsUsd) * 100) / 100;
+    const numCtxSafe = Number(localProvider?.getNumCtx() ?? localNumCtx) || 8192;
+    const numGpuSafe = Number(localProvider?.getNumGpu() ?? localNumGpu);
+
     if (globals.json) {
       console.log(JSON.stringify({
         graph: {
@@ -128,13 +135,13 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
             available: ollamaAvailable,
             host: localHost,
             model: localModel,
-            numCtx: localProvider?.getNumCtx() ?? localNumCtx,
+            numCtx: numCtxSafe,
           },
         },
         budget: {
-          monthlyLimitUsd: config.llm.budget.monthlyLimitUsd,
-          spentThisMonthUsd: summary.totalCostUsd,
-          localSavingsUsd: Math.round(localSavingsUsd * 100) / 100,
+          monthlyLimitUsd: budgetLimitUsd,
+          spentThisMonthUsd: spentUsdSafe,
+          localSavingsUsd: localSavingsSafe,
         },
       }));
       store.close();
@@ -178,8 +185,8 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
     console.log('');
 
     // LLM Mode + provider block
-    const numCtx = localProvider?.getNumCtx() ?? localNumCtx;
-    const numGpu = localProvider?.getNumGpu() ?? localNumGpu;
+    const numCtx = numCtxSafe;
+    const numGpu = numGpuSafe;
 
     console.log(chalk.white('LLM Mode:  ') + mode);
 
@@ -216,15 +223,13 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
     console.log('');
 
     // Budget + savings
-    const budgetLimit = config.llm.budget.monthlyLimitUsd;
-    const spentUsd = summary.totalCostUsd;
-    const usedPct = budgetLimit > 0 ? ((spentUsd / budgetLimit) * 100).toFixed(1) : '0.0';
+    const usedPct = budgetLimitUsd > 0 ? ((spentUsdSafe / budgetLimitUsd) * 100).toFixed(1) : '0.0';
     console.log(
       chalk.white('Cost:      ') +
-      `$${spentUsd.toFixed(2)} / $${budgetLimit.toFixed(2)} this month (${usedPct}%)`,
+      `$${spentUsdSafe.toFixed(2)} / $${budgetLimitUsd.toFixed(2)} this month (${usedPct}%)`,
     );
-    if (localSavingsUsd > 0) {
-      console.log(chalk.dim(`           Savings from local: ~$${localSavingsUsd.toFixed(2)} est.`));
+    if (localSavingsSafe > 0) {
+      console.log(chalk.dim(`           Savings from local: ~$${localSavingsSafe.toFixed(2)} est.`));
     }
 
     console.log('');
