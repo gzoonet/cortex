@@ -2,6 +2,7 @@ import express from 'express';
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import { type CortexConfig, createLogger } from '@cortex/core';
 import { SQLiteStore, QueryEngine, VectorStore } from '@cortex/graph';
 import { Router as LLMRouter } from '@cortex/llm';
@@ -130,7 +131,8 @@ export async function startServer(options: ServerOptions): Promise<void> {
     const webDist = resolve(options.webDistPath);
     app.use(express.static(webDist));
     // SPA fallback: serve index.html for all non-API routes
-    app.get('*', rateLimiter, (_req, res) => {
+    const spaLimiter = rateLimit({ windowMs: 60_000, max: 60 });
+    app.get('*', spaLimiter, (_req, res) => {
       res.sendFile(resolve(webDist, 'index.html'));
     });
     logger.info('Serving web dashboard', { path: webDist });
