@@ -20,6 +20,7 @@ import {
   GRAPH_ENTITY_NOT_FOUND,
 } from '@cortex/core';
 import { up as applyInitialMigration } from './migrations/001-initial.js';
+import { up as applyIndexMigration } from './migrations/002-add-indexes.js';
 
 // --- Report types ---
 
@@ -258,13 +259,16 @@ export class SQLiteStore implements GraphStore {
     } = options;
 
     this.dbPath = resolveHomePath(dbPath);
-    mkdirSync(dirname(this.dbPath), { recursive: true });
+    mkdirSync(dirname(this.dbPath), { recursive: true, mode: 0o700 });
 
     if (backupOnStartup) {
       this.backupSync();
     }
 
     this.db = new Database(this.dbPath);
+
+    // Restrict DB file permissions (owner-only read/write)
+    try { chmodSync(this.dbPath, 0o600); } catch { /* Windows — ignore */ }
 
     if (walMode) {
       this.db.pragma('journal_mode = WAL');
@@ -278,6 +282,7 @@ export class SQLiteStore implements GraphStore {
   private migrate(): void {
     try {
       applyInitialMigration(this.db);
+      applyIndexMigration(this.db);
     } catch (err) {
       throw new CortexError(
         GRAPH_DB_ERROR,
@@ -307,11 +312,27 @@ export class SQLiteStore implements GraphStore {
     this.db.close();
   }
 
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
+  }
+
   // --- Entities ---
+
+  createEntitySync(
+    entity: Omit<Entity, 'id' | 'createdAt' | 'updatedAt'>,
+  ): Entity {
+    return this._createEntity(entity);
+  }
 
   async createEntity(
     entity: Omit<Entity, 'id' | 'createdAt' | 'updatedAt'>,
   ): Promise<Entity> {
+    return this._createEntity(entity);
+  }
+
+  private _createEntity(
+    entity: Omit<Entity, 'id' | 'createdAt' | 'updatedAt'>,
+  ): Entity {
     const id = randomUUID();
     const ts = now();
 
@@ -451,6 +472,11 @@ export class SQLiteStore implements GraphStore {
     let sql: string;
 
     if (query.search) {
+      // Sanitize FTS input: strip operators to prevent FTS5 injection
+      const sanitizedSearch = query.search.replace(/[^a-zA-Z0-9\s]/g, ' ').trim();
+      if (!sanitizedSearch) {
+        return [];
+      }
       // Use FTS for text search
       sql = `
         SELECT e.* FROM entities e
@@ -458,7 +484,7 @@ export class SQLiteStore implements GraphStore {
         WHERE fts.entities_fts MATCH ? AND ${conditions.join(' AND ')}
         ORDER BY rank
       `;
-      params.unshift(query.search);
+      params.unshift(sanitizedSearch);
     } else {
       sql = `
         SELECT * FROM entities
@@ -516,22 +542,39 @@ export class SQLiteStore implements GraphStore {
   async getRelationshipsForEntity(
     entityId: string,
     direction: 'in' | 'out' | 'both' = 'both',
+    limit = 200,
   ): Promise<Relationship[]> {
     let sql: string;
-    let params: string[];
+    let params: Array<string | number>;
 
     if (direction === 'out') {
-      sql = 'SELECT * FROM relationships WHERE source_entity_id = ?';
-      params = [entityId];
+      sql = 'SELECT * FROM relationships WHERE source_entity_id = ? LIMIT ?';
+      params = [entityId, limit];
     } else if (direction === 'in') {
-      sql = 'SELECT * FROM relationships WHERE target_entity_id = ?';
-      params = [entityId];
+      sql = 'SELECT * FROM relationships WHERE target_entity_id = ? LIMIT ?';
+      params = [entityId, limit];
     } else {
-      sql = 'SELECT * FROM relationships WHERE source_entity_id = ? OR target_entity_id = ?';
-      params = [entityId, entityId];
+      sql = 'SELECT * FROM relationships WHERE source_entity_id = ? OR target_entity_id = ? LIMIT ?';
+      params = [entityId, entityId, limit];
     }
 
     const rows = this.db.prepare(sql).all(...params) as RelationshipRow[];
+    return rows.map(rowToRelationship);
+  }
+
+  async getRelationshipsForEntities(entityIds: string[]): Promise<Relationship[]> {
+    if (entityIds.length === 0) return [];
+
+    const placeholders = entityIds.map(() => '?').join(',');
+    const sql = `
+      SELECT * FROM relationships
+      WHERE source_entity_id IN (${placeholders})
+         OR target_entity_id IN (${placeholders})
+      LIMIT 2000
+    `;
+    const rows = this.db.prepare(sql).all(
+      ...entityIds, ...entityIds,
+    ) as RelationshipRow[];
     return rows.map(rowToRelationship);
   }
 

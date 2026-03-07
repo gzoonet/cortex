@@ -21,9 +21,20 @@ export class FileWatcher {
   private options: WatcherOptions;
   private handler: FileChangeHandler | null = null;
   private debounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private compiledExcludePatterns: Array<{ pattern: RegExp; isGlob: boolean } | string>;
 
   constructor(options: WatcherOptions) {
     this.options = options;
+    // Pre-compile exclude patterns once instead of on every file event
+    this.compiledExcludePatterns = options.exclude.map((pattern) => {
+      if (pattern.includes('*')) {
+        const re = new RegExp(
+          '^' + pattern.replace(/\\/g, '\\\\').replace(/\./g, '\\.').replace(/\*\*/g, '.*').replace(/\*/g, '[^/\\\\]*') + '$'
+        );
+        return { pattern: re, isGlob: true };
+      }
+      return pattern;
+    });
   }
 
   static fromConfig(config: IngestConfig): FileWatcher {
@@ -126,14 +137,11 @@ export class FileWatcher {
 
   private isExcluded(filePath: string): boolean {
     const parts = filePath.split(/[\\/]/);
-    for (const pattern of this.options.exclude) {
-      if (pattern.includes('*')) {
-        const re = new RegExp(
-          '^' + pattern.replace(/\./g, '\\.').replace(/\*\*/g, '.*').replace(/\*/g, '[^/\\\\]*') + '$'
-        );
-        if (parts.some((p) => re.test(p))) return true;
+    for (const compiled of this.compiledExcludePatterns) {
+      if (typeof compiled === 'string') {
+        if (parts.some((p) => p === compiled)) return true;
       } else {
-        if (parts.some((p) => p === pattern)) return true;
+        if (parts.some((p) => compiled.pattern.test(p))) return true;
       }
     }
     return false;

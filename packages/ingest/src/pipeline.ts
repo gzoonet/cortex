@@ -33,6 +33,7 @@ export interface PipelineOptions {
   batchSize: number;
   projectPrivacyLevel: 'standard' | 'sensitive' | 'restricted';
   mergeConfidenceThreshold: number;
+  secretPatterns?: string[];
 }
 
 export interface PipelineResult {
@@ -50,6 +51,8 @@ export class IngestionPipeline {
   // Shared across all ingestFile calls — prevents the same entity pair from being
   // evaluated twice when multiple files ingest in the same batch.
   private checkedContradictionPairs: Set<string> = new Set();
+  // Pre-compiled secret patterns for scrubbing before cloud LLM calls
+  private compiledSecretPatterns: RegExp[];
 
   constructor(
     router: Router,
@@ -59,6 +62,30 @@ export class IngestionPipeline {
     this.router = router;
     this.store = store;
     this.options = options;
+    this.compiledSecretPatterns = (options.secretPatterns ?? [])
+      .map((pattern) => {
+        try {
+          return new RegExp(pattern, 'g');
+        } catch {
+          logger.warn('Invalid secret pattern, skipping', { pattern });
+          return null;
+        }
+      })
+      .filter((r): r is RegExp => r !== null);
+  }
+
+  /**
+   * Scrub secrets from content before sending to cloud LLMs.
+   * Only applied for standard privacy (sensitive/restricted use local provider).
+   */
+  private scrubSecrets(content: string): string {
+    if (this.compiledSecretPatterns.length === 0) return content;
+    let scrubbed = content;
+    for (const re of this.compiledSecretPatterns) {
+      re.lastIndex = 0; // reset global regex state
+      scrubbed = scrubbed.replace(re, '[SECRET_REDACTED]');
+    }
+    return scrubbed;
   }
 
   async ingestFile(filePath: string): Promise<PipelineResult> {
@@ -163,12 +190,18 @@ export class IngestionPipeline {
       const deduped = this.deduplicateEntities(allEntities);
       logger.debug('Extracted entities', { filePath, raw: allEntities.length, deduped: deduped.length });
 
-      // Store entities
+      // Store entities in a transaction for atomicity and performance
+      // (better-sqlite3 operations are synchronous, so await resolves immediately)
       const storedEntities: Entity[] = [];
-      for (const entity of deduped) {
-        const stored = await this.store.createEntity(entity);
-        storedEntities.push(stored);
+      this.store.transaction(() => {
+        for (const entity of deduped) {
+          // createEntity is sync under the hood (better-sqlite3)
+          storedEntities.push(this.store.createEntitySync(entity));
+        }
+      });
 
+      // Emit events outside the transaction
+      for (const stored of storedEntities) {
         eventBus.emit({
           type: 'entity.created',
           payload: { entity: stored },
@@ -265,6 +298,12 @@ export class IngestionPipeline {
       ? { forceProvider: 'local' as const }
       : {};
 
+    // Step 2: scrub secrets before sending to cloud LLM
+    // (only relevant for standard privacy; sensitive/restricted use local provider)
+    const safeContent = this.options.projectPrivacyLevel === 'standard'
+      ? this.scrubSecrets(chunk.content)
+      : chunk.content;
+
     try {
       const result = await this.router.completeStructured(
         {
@@ -273,7 +312,7 @@ export class IngestionPipeline {
             filePath,
             projectName: this.options.projectName,
             fileType,
-            content: chunk.content,
+            content: safeContent,
           }),
           promptId: entityExtractionPrompt.PROMPT_ID,
           promptVersion: entityExtractionPrompt.PROMPT_VERSION,

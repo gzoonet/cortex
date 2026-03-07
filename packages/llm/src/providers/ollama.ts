@@ -68,6 +68,50 @@ interface OllamaTagsResponse {
   }>;
 }
 
+// IPs that must never be used as Ollama host (cloud metadata, link-local)
+const BLOCKED_HOST_PATTERNS = [
+  /^169\.254\./,          // AWS/Azure metadata link-local
+  /^fd[0-9a-f]{2}:/i,    // IPv6 unique local (fd00::/8)
+  /^fe80:/i,              // IPv6 link-local
+];
+
+function validateOllamaHost(host: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(host);
+  } catch {
+    throw new CortexError(
+      LLM_PROVIDER_UNAVAILABLE, 'high', 'llm',
+      `Invalid Ollama host URL: ${host}`,
+      { host },
+      'Set a valid URL like http://localhost:11434',
+      false,
+    );
+  }
+
+  const hostname = parsed.hostname;
+
+  for (const pattern of BLOCKED_HOST_PATTERNS) {
+    if (pattern.test(hostname)) {
+      throw new CortexError(
+        LLM_PROVIDER_UNAVAILABLE, 'high', 'llm',
+        `Ollama host "${hostname}" is blocked — it matches a link-local or cloud metadata IP range.`,
+        { host },
+        'Use a non-link-local address for Ollama.',
+        false,
+      );
+    }
+  }
+
+  const localhostNames = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
+  if (!localhostNames.has(hostname)) {
+    logger.warn(
+      `Ollama host is not localhost (${hostname}). ` +
+      'Ensure the remote Ollama instance is trusted and network-secured.',
+    );
+  }
+}
+
 export class OllamaProvider implements LLMProvider {
   readonly name = 'ollama';
   readonly type = 'local' as const;
@@ -79,6 +123,7 @@ export class OllamaProvider implements LLMProvider {
   private numGpu: number;
   private timeoutMs: number;
   private keepAlive: string;
+  private streamInactivityTimeoutMs: number;
 
   readonly capabilities: ProviderCapabilities = {
     supportedTasks: [
@@ -99,12 +144,14 @@ export class OllamaProvider implements LLMProvider {
 
   constructor(options: OllamaProviderOptions = {}) {
     this.host = options.host ?? process.env['CORTEX_OLLAMA_HOST'] ?? 'http://localhost:11434';
+    validateOllamaHost(this.host);
     this.model = options.model ?? 'mistral:7b-instruct-q5_K_M';
     this.embeddingModel = options.embeddingModel ?? 'nomic-embed-text';
     this.numCtx = options.numCtx ?? 8192;
     this.numGpu = options.numGpu ?? -1;
     this.timeoutMs = options.timeoutMs ?? 300_000; // 5 minutes - allows for cold start model loading
     this.keepAlive = options.keepAlive ?? '5m';
+    this.streamInactivityTimeoutMs = 60_000; // 60s inactivity timeout during streaming
 
     // Update max context tokens based on config
     this.capabilities.maxContextTokens = this.numCtx;
@@ -261,27 +308,60 @@ export class OllamaProvider implements LLMProvider {
       let inputTokens = 0;
       let outputTokens = 0;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      // Per-chunk inactivity timeout — aborts if model stalls mid-stream
+      const streamController = new AbortController();
+      let inactivityTimer = setTimeout(
+        () => streamController.abort(),
+        this.streamInactivityTimeoutMs,
+      );
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n').filter(line => line.trim());
+      try {
+        while (true) {
+          const readPromise = reader.read();
+          // Race the read against the inactivity abort
+          const raceResult = await Promise.race([
+            readPromise,
+            new Promise<never>((_, reject) => {
+              streamController.signal.addEventListener('abort', () =>
+                reject(new Error('Stream inactivity timeout')),
+                { once: true },
+              );
+              if (streamController.signal.aborted) {
+                reject(new Error('Stream inactivity timeout'));
+              }
+            }),
+          ]);
 
-        for (const line of lines) {
-          try {
-            const data = JSON.parse(line) as OllamaGenerateResponse;
-            if (data.response) {
-              yield data.response;
+          const { done, value } = raceResult;
+          if (done) break;
+
+          // Reset inactivity timer on each chunk
+          clearTimeout(inactivityTimer);
+          inactivityTimer = setTimeout(
+            () => streamController.abort(),
+            this.streamInactivityTimeoutMs,
+          );
+
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n').filter(line => line.trim());
+
+          for (const line of lines) {
+            try {
+              const data = JSON.parse(line) as OllamaGenerateResponse;
+              if (data.response) {
+                yield data.response;
+              }
+              if (data.done) {
+                inputTokens = data.prompt_eval_count ?? 0;
+                outputTokens = data.eval_count ?? 0;
+              }
+            } catch {
+              // Skip invalid JSON lines
             }
-            if (data.done) {
-              inputTokens = data.prompt_eval_count ?? 0;
-              outputTokens = data.eval_count ?? 0;
-            }
-          } catch {
-            // Skip invalid JSON lines
           }
         }
+      } finally {
+        clearTimeout(inactivityTimer);
       }
 
       return {

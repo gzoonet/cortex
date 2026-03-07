@@ -31,7 +31,7 @@ If any check fails critically, the request is **blocked** (not queued, not retri
 
 > **Implementation status:**
 > - Step 1 (privacy check): Enforced during ingestion and query paths. `restricted` entities are excluded from query context entirely. `sensitive` entities have their `content` redacted to `[REDACTED]` before being sent to cloud LLMs. Applies to all query entry points (REST API, CLI, MCP).
-> - Step 2 (secret scan): `secretPatterns` are defined in config but **not applied** before cloud transmission. Planned.
+> - Step 2 (secret scan): Implemented. `secretPatterns` from config are compiled at pipeline construction and applied via `scrubSecrets()` before cloud LLM transmission (standard privacy level only; sensitive/restricted use local provider). Matches are replaced with `[SECRET_REDACTED]`.
 > - Step 3 (PII detection): Planned for future release.
 > - Step 4 (size validation): Not yet implemented.
 

@@ -67,12 +67,12 @@ export class ResponseCache {
   ): void {
     if (!this.enabled) return;
 
-    // Evict oldest entries if at capacity
+    // Evict oldest entry if at capacity — Map preserves insertion order,
+    // so the first key is the oldest (O(1) instead of O(n log n) sort)
     if (this.cache.size >= this.maxEntries) {
-      const oldest = [...this.cache.entries()]
-        .sort((a, b) => a[1].createdAt - b[1].createdAt)[0];
-      if (oldest) {
-        this.cache.delete(oldest[0]);
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey !== undefined) {
+        this.cache.delete(firstKey);
       }
     }
 

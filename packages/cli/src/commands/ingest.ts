@@ -135,6 +135,7 @@ async function runIngest(
     batchSize: config.ingest.batchSize,
     projectPrivacyLevel: project.privacyLevel,
     mergeConfidenceThreshold: config.graph.mergeConfidenceThreshold,
+    secretPatterns: config.privacy.secretPatterns,
   });
 
   let totalEntities = 0;
