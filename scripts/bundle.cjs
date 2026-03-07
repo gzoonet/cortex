@@ -13,6 +13,11 @@ const allDeps = [
 
 const externals = allDeps.map(d => '--external:' + d).join(' ');
 
+// Rebuild web dashboard so npm publish always ships fresh assets
+// Safe: no user input involved, hardcoded command string
+console.log('Building web dashboard...');
+execSync('npm run build --workspace=packages/web', { cwd: root, stdio: 'inherit' });
+
 execSync(
   `npx esbuild packages/cli/dist/index.js --bundle --platform=node --target=node20 --format=esm --outfile=dist/cortex.mjs ${externals}`,
   { cwd: root, stdio: 'inherit' }
