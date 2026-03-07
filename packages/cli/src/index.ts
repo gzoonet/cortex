@@ -28,7 +28,7 @@ function getVersion(): string {
   for (let i = 0; i < 6; i++) {
     try {
       const pkg = JSON.parse(readFileSync(resolve(dir, 'package.json'), 'utf-8'));
-      if (pkg.name === 'gzoo-cortex' && pkg.version) return pkg.version;
+      if ((pkg.name === '@gzoo/cortex' || pkg.name === 'gzoo-cortex') && pkg.version) return pkg.version;
     } catch { /* not here */ }
     dir = resolve(dir, '..');
   }

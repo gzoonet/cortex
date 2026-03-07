@@ -5,7 +5,7 @@ A step-by-step guide to installing, configuring, and using Cortex.
 ## 1. Install
 
 ```bash
-npm install -g gzoo-cortex
+npm install -g @gzoo/cortex
 ```
 
 Verify it worked:

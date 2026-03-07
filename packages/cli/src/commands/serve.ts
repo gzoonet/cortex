@@ -12,7 +12,7 @@ function findPkgRoot(startDir: string): string {
     try {
       const pkgPath = resolve(dir, 'package.json');
       const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-      if (pkg.name === 'gzoo-cortex') return dir;
+      if (pkg.name === '@gzoo/cortex' || pkg.name === 'gzoo-cortex') return dir;
     } catch { /* keep looking */ }
     const parent = dirname(dir);
     if (parent === dir) break;

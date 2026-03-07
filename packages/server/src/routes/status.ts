@@ -13,7 +13,7 @@ try {
   for (let i = 0; i < 6; i++) {
     try {
       const pkg = JSON.parse(readFileSync(resolve(dir, 'package.json'), 'utf-8'));
-      if (pkg.name === 'gzoo-cortex' && pkg.version) { _version = pkg.version; break; }
+      if ((pkg.name === '@gzoo/cortex' || pkg.name === 'gzoo-cortex') && pkg.version) { _version = pkg.version; break; }
     } catch { /* not here */ }
     dir = resolve(dir, '..');
   }

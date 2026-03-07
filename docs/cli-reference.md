@@ -5,7 +5,7 @@ Complete reference for all `cortex` commands, flags, and options.
 ## Installation
 
 ```bash
-npm install -g gzoo-cortex
+npm install -g @gzoo/cortex
 ```
 
 After installation, the `cortex` command is available globally.
