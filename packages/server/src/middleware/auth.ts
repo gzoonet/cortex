@@ -94,6 +94,10 @@ export function createAuthMiddleware(
   };
 }
 
+// NOTE: WebSocket auth uses query string token (?token=...) because the WebSocket
+// protocol does not support custom headers during the upgrade handshake. This means
+// the token may appear in server access logs and proxy logs. For production use on
+// non-localhost, consider additional network-level protections (TLS, firewall rules).
 export function validateWsToken(config: CortexConfig, host: string, url: string | undefined): boolean {
   const authEnabled = config.server.auth.enabled;
   const token = config.server.auth.token;

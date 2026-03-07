@@ -107,6 +107,7 @@ async function runWatch(
     batchSize: config.ingest.batchSize,
     projectPrivacyLevel: project.privacyLevel,
     mergeConfidenceThreshold: config.graph.mergeConfidenceThreshold,
+    secretPatterns: config.privacy.secretPatterns,
   });
 
   // Create watcher

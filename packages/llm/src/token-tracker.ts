@@ -22,6 +22,8 @@ export function estimateCost(
   );
 }
 
+const MAX_IN_MEMORY_RECORDS = 10_000;
+
 export class TokenTracker {
   private records: TokenUsageRecord[] = [];
   private monthlyBudgetUsd: number;
@@ -58,9 +60,28 @@ export class TokenTracker {
     };
 
     this.records.push(record);
+    this.trimOldRecords();
     this.checkBudget();
 
     return record;
+  }
+
+  private trimOldRecords(): void {
+    if (this.records.length <= MAX_IN_MEMORY_RECORDS) return;
+
+    // Keep all current-month records; drop oldest records from prior months
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const currentMonthRecords = this.records.filter((r) => r.timestamp.startsWith(currentMonth));
+    const priorRecords = this.records.filter((r) => !r.timestamp.startsWith(currentMonth));
+
+    if (currentMonthRecords.length >= MAX_IN_MEMORY_RECORDS) {
+      // Even current month alone exceeds cap — keep only the most recent records
+      this.records = currentMonthRecords.slice(-MAX_IN_MEMORY_RECORDS);
+    } else {
+      // Keep all current month + most recent prior month records to fill cap
+      const keepFromPrior = MAX_IN_MEMORY_RECORDS - currentMonthRecords.length;
+      this.records = [...priorRecords.slice(-keepFromPrior), ...currentMonthRecords];
+    }
   }
 
   private checkBudget(): void {
