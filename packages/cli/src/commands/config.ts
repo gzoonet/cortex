@@ -83,10 +83,13 @@ export function registerConfigCommand(program: Command): void {
     });
 }
 
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
   const parts = path.split('.');
   let current: unknown = obj;
   for (const part of parts) {
+    if (DANGEROUS_KEYS.has(part)) return undefined;
     if (current === null || current === undefined || typeof current !== 'object') {
       return undefined;
     }
@@ -100,12 +103,15 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
   let current: Record<string, unknown> = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i]!;
+    if (DANGEROUS_KEYS.has(part)) throw new Error(`Invalid config key: ${part}`);
     if (current[part] === undefined || typeof current[part] !== 'object') {
       current[part] = {};
     }
     current = current[part] as Record<string, unknown>;
   }
-  current[parts[parts.length - 1]!] = value;
+  const lastKey = parts[parts.length - 1]!;
+  if (DANGEROUS_KEYS.has(lastKey)) throw new Error(`Invalid config key: ${lastKey}`);
+  current[lastKey] = value;
 }
 
 function parseValue(value: string): unknown {

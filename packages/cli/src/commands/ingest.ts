@@ -50,7 +50,8 @@ async function runIngest(
     const lastSep = Math.max(resolvedPattern.lastIndexOf('/'), resolvedPattern.lastIndexOf('\\'));
     const dir = lastSep >= 0 ? resolvedPattern.slice(0, lastSep) : process.cwd();
     const filePattern = lastSep >= 0 ? resolvedPattern.slice(lastSep + 1) : resolvedPattern;
-    const regex = new RegExp('^' + filePattern.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$');
+    const escaped = filePattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp('^' + escaped.replace(/\*/g, '.*') + '$');
     if (existsSync(dir)) {
       for (const entry of readdirSync(dir)) {
         if (regex.test(entry)) {

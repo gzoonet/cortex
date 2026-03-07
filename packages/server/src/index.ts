@@ -111,11 +111,12 @@ export async function startServer(options: ServerOptions): Promise<void> {
 
   // API routes
   const api = express.Router();
+  api.use(rateLimiter);
   api.use(createAuthMiddleware({ config, host }));
   api.use('/entities', createEntityRoutes(bundle));
   api.use('/relationships', createRelationshipRoutes(bundle));
   api.use('/projects', createProjectRoutes(bundle));
-  api.use('/query', rateLimiter, createQueryRoutes(bundle));
+  api.use('/query', createQueryRoutes(bundle));
   api.use('/contradictions', createContradictionRoutes(bundle));
   api.use('/', createStatusRoutes(bundle));
   app.use('/api/v1', api);

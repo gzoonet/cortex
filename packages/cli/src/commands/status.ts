@@ -9,6 +9,17 @@ import type { GlobalOptions } from '../index.js';
 
 const logger = createLogger('cli:status');
 
+function sanitizeUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.username = '';
+    parsed.password = '';
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return '[invalid-url]';
+  }
+}
+
 async function checkOllamaAvailable(host: string): Promise<boolean> {
   try {
     const controller = new AbortController();
@@ -101,7 +112,7 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
           local: {
             provider: 'ollama',
             available: ollamaAvailable,
-            host: config.llm.local.host,
+            host: sanitizeUrl(config.llm.local.host),
             model: config.llm.local.model,
             numCtx: localProvider?.getNumCtx() ?? config.llm.local.numCtx,
           },
@@ -159,7 +170,7 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
     console.log(chalk.white('LLM Mode:  ') + mode);
 
     const cloudLabel = `${config.llm.cloud.models.primary} / ${config.llm.cloud.models.fast} (${config.llm.cloud.provider})`;
-    const localLabel = `${config.llm.local.model} @ ${config.llm.local.host}`;
+    const localLabel = `${config.llm.local.model} @ ${sanitizeUrl(config.llm.local.host)}`;
     const localDetail = `${numCtx.toLocaleString()} ctx | GPU: ${numGpu === -1 ? 'auto' : numGpu} layers | ~30 tok/s est.`;
 
     if (mode === 'cloud-first') {
@@ -212,7 +223,7 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
       statusOk = ollamaAvailable;
       statusMsg = ollamaAvailable
         ? '✓ Fully operational'
-        : `⚠ Ollama not available at ${config.llm.local.host}. Run \`ollama serve\`.`;
+        : `⚠ Ollama not available at ${sanitizeUrl(config.llm.local.host)}. Run \`ollama serve\`.`;
     } else if (mode === 'local-first') {
       statusOk = ollamaAvailable || hasApiKey;
       if (ollamaAvailable) {
@@ -238,7 +249,7 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
       statusOk = hasApiKey;
       statusMsg = hasApiKey
         ? '✓ Fully operational'
-        : '⚠ API key not set. Run `cortex init` or set ' + (apiKeyEnvVar ?? 'your cloud API key env var') + '.';
+        : '⚠ API key not set. Run `cortex init` to configure.';
     }
 
     console.log(

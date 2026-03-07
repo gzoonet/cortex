@@ -72,7 +72,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     this.primaryModel = options.primaryModel ?? 'gpt-4o';
     this.fastModel = options.fastModel ?? 'gpt-4o-mini';
-    this.isGemini = options.baseUrl.includes('generativelanguage.googleapis.com');
+    try {
+      const parsedUrl = new URL(options.baseUrl);
+      this.isGemini = parsedUrl.hostname === 'generativelanguage.googleapis.com';
+    } catch {
+      this.isGemini = false;
+    }
 
     logger.info('OpenAI-compatible provider initialized', {
       baseUrl: options.baseUrl,

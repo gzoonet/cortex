@@ -30,7 +30,7 @@ export function isConversationMarkdown(content: string): boolean {
   const lines = content.split('\n');
   const headings: string[] = [];
   for (const line of lines) {
-    const m = line.match(/^#{1,3}\s+(.+)$/);
+    const m = line.match(/^#{1,3}\s+(\S.*)$/);
     if (m) {
       headings.push(m[1].trim());
       if (headings.length >= 2) break;
@@ -125,7 +125,7 @@ function parseConversationMarkdown(content: string): ParsedSection[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const headingMatch = line.match(/^#{1,3}\s+(.+)$/);
+    const headingMatch = line.match(/^#{1,3}\s+(\S.*)$/);
     if (headingMatch) {
       flush(i);
       currentRole = headingMatch[1].trim();

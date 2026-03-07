@@ -28,10 +28,7 @@ export class FileWatcher {
     // Pre-compile exclude patterns once instead of on every file event
     this.compiledExcludePatterns = options.exclude.map((pattern) => {
       if (pattern.includes('*')) {
-        const re = new RegExp(
-          '^' + pattern.replace(/\\/g, '\\\\').replace(/\./g, '\\.').replace(/\*\*/g, '.*').replace(/\*/g, '[^/\\\\]*') + '$'
-        );
-        return { pattern: re, isGlob: true };
+        return { pattern: globToRegex(pattern), isGlob: true };
       }
       return pattern;
     });
@@ -153,12 +150,7 @@ export class FileWatcher {
     for (const pattern of this.options.exclude) {
       if (pattern.includes('*')) {
         // Glob pattern → convert to regex
-        const regexStr = pattern
-          .replace(/\./g, '\\.')
-          .replace(/\*\*/g, '___GLOBSTAR___')
-          .replace(/\*/g, '[^/]*')
-          .replace(/___GLOBSTAR___/g, '.*');
-        patterns.push(new RegExp(regexStr));
+        patterns.push(globToRegex(pattern));
       } else if (pattern.includes('.')) {
         // File name pattern (e.g., 'package-lock.json') — match anywhere in path
         patterns.push(new RegExp(`(^|[\\\\/])${escapeRegex(pattern)}$`));
@@ -175,4 +167,14 @@ export class FileWatcher {
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function globToRegex(pattern: string): RegExp {
+  // Escape all regex special chars except *, then convert glob stars
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  const regexStr = escaped
+    .replace(/\*\*/g, '___GLOBSTAR___')
+    .replace(/\*/g, '[^/\\\\]*')
+    .replace(/___GLOBSTAR___/g, '.*');
+  return new RegExp('^' + regexStr + '$');
 }
