@@ -29,7 +29,7 @@ export class FileWatcher {
     this.compiledExcludePatterns = options.exclude.map((pattern) => {
       if (pattern.includes('*')) {
         const re = new RegExp(
-          '^' + pattern.replace(/\./g, '\\.').replace(/\*\*/g, '.*').replace(/\*/g, '[^/\\\\]*') + '$'
+          '^' + pattern.replace(/\\/g, '\\\\').replace(/\./g, '\\.').replace(/\*\*/g, '.*').replace(/\*/g, '[^/\\\\]*') + '$'
         );
         return { pattern: re, isGlob: true };
       }
