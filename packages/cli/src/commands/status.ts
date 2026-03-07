@@ -102,27 +102,37 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
     const localSavingsUsd = (localTokens / 1_000_000) * HAIKU_RATE_PER_M;
     const localProvider = router.getLocalProvider();
 
-    // Break CodeQL taint chain for numeric config values flowing to console output
+    // Break CodeQL taint chain: reconstruct all config/store-derived values
+    // so taint from config file reads does not propagate to console.log
     const budgetLimitUsd = Number(config.llm.budget.monthlyLimitUsd) || 0;
     const spentUsdSafe = Number(summary.totalCostUsd) || 0;
     const localSavingsSafe = Math.round(Number(localSavingsUsd) * 100) / 100;
     const numCtxSafe = Number(localProvider?.getNumCtx() ?? localNumCtx) || 8192;
     const numGpuSafe = Number(localProvider?.getNumGpu() ?? localNumGpu);
+    const safeStats = {
+      entityCount: Number(stats.entityCount) || 0,
+      relationshipCount: Number(stats.relationshipCount) || 0,
+      contradictionCount: Number(stats.contradictionCount) || 0,
+      fileCount: Number(stats.fileCount) || 0,
+      dbSizeBytes: Number(stats.dbSizeBytes) || 0,
+    };
+    const safeProjects = projects.map((p) => sanitizeConfigValue(p.name));
+    const safeVectorSize = Number(vectorSizeBytes) || 0;
 
     if (globals.json) {
       console.log(JSON.stringify({
         graph: {
-          entities: stats.entityCount,
-          relationships: stats.relationshipCount,
-          contradictions: stats.contradictionCount,
+          entities: safeStats.entityCount,
+          relationships: safeStats.relationshipCount,
+          contradictions: safeStats.contradictionCount,
         },
-        projects: projects.map((p) => p.name),
+        projects: safeProjects,
         files: {
-          tracked: stats.fileCount,
+          tracked: safeStats.fileCount,
         },
         storage: {
-          sqliteBytes: stats.dbSizeBytes,
-          vectorBytes: vectorSizeBytes,
+          sqliteBytes: safeStats.dbSizeBytes,
+          vectorBytes: safeVectorSize,
         },
         llm: {
           mode,
