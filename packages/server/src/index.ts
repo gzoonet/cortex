@@ -130,7 +130,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
     const webDist = resolve(options.webDistPath);
     app.use(express.static(webDist));
     // SPA fallback: serve index.html for all non-API routes
-    app.get('*', (_req, res) => {
+    app.get('*', rateLimiter, (_req, res) => {
       res.sendFile(resolve(webDist, 'index.html'));
     });
     logger.info('Serving web dashboard', { path: webDist });

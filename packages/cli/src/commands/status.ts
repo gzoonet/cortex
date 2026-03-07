@@ -70,7 +70,7 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
     // Check LLM availability
     const apiKeySource = config.llm.cloud.apiKeySource;
     const apiKeyEnvVar = apiKeySource.startsWith("env:") ? apiKeySource.slice(4) : undefined;
-    const hasApiKey = apiKeyEnvVar ? Boolean(process.env[apiKeyEnvVar]) : false;
+    const hasApiKey = apiKeyEnvVar ? Object.hasOwn(process.env, apiKeyEnvVar) : false;
     const mode = config.llm.mode;
     const ollamaAvailable = mode !== 'cloud-first' ? await checkOllamaAvailable(config.llm.local.host) : false;
 

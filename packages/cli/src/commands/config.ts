@@ -110,8 +110,15 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
     current = current[part] as Record<string, unknown>;
   }
   const lastKey = parts[parts.length - 1]!;
-  if (DANGEROUS_KEYS.has(lastKey)) throw new Error(`Invalid config key: ${lastKey}`);
-  current[lastKey] = value;
+  if (lastKey === '__proto__' || lastKey === 'constructor' || lastKey === 'prototype') {
+    throw new Error(`Invalid config key: ${lastKey}`);
+  }
+  Object.defineProperty(current, lastKey, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 function parseValue(value: string): unknown {
