@@ -163,12 +163,18 @@ export class IngestionPipeline {
       const deduped = this.deduplicateEntities(allEntities);
       logger.debug('Extracted entities', { filePath, raw: allEntities.length, deduped: deduped.length });
 
-      // Store entities
+      // Store entities in a transaction for atomicity and performance
+      // (better-sqlite3 operations are synchronous, so await resolves immediately)
       const storedEntities: Entity[] = [];
-      for (const entity of deduped) {
-        const stored = await this.store.createEntity(entity);
-        storedEntities.push(stored);
+      this.store.transaction(() => {
+        for (const entity of deduped) {
+          // createEntity is sync under the hood (better-sqlite3)
+          storedEntities.push(this.store.createEntitySync(entity));
+        }
+      });
 
+      // Emit events outside the transaction
+      for (const stored of storedEntities) {
         eventBus.emit({
           type: 'entity.created',
           payload: { entity: stored },

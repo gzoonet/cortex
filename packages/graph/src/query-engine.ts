@@ -24,6 +24,18 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / AVG_CHARS_PER_TOKEN);
 }
 
+const FTS_STOP_WORDS = new Set([
+  'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+  'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been',
+  'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
+  'could', 'should', 'may', 'might', 'shall', 'can', 'need', 'must',
+  'what', 'which', 'who', 'how', 'why', 'when', 'where', 'that', 'this',
+  'these', 'those', 'it', 'its', 'me', 'my', 'you', 'your', 'we', 'our',
+  'they', 'their', 'he', 'she', 'i', 'all', 'any', 'each', 'some', 'no',
+  'not', 'so', 'yet', 'use', 'used', 'using', 'about', 'tell', 'know',
+  'get', 'got', 'make', 'made', 'see', 'give', 'go', 'come', 'take',
+]);
+
 export class QueryEngine {
   private sqliteStore: SQLiteStore;
   private vectorStore: VectorStore;
@@ -75,21 +87,12 @@ export class QueryEngine {
     // Filter entities by project privacy level
     const privacyFiltered = await this.filterByPrivacy(contextEntities);
 
-    // Gather relationships between context entities
+    // Gather relationships between context entities (single batch query)
     const entityIds = new Set(privacyFiltered.map((e) => e.id));
-    const relationships: Relationship[] = [];
-
-    for (const entity of privacyFiltered) {
-      const rels = await this.sqliteStore.getRelationshipsForEntity(entity.id);
-      for (const rel of rels) {
-        if (entityIds.has(rel.sourceEntityId) && entityIds.has(rel.targetEntityId)) {
-          relationships.push(rel);
-        }
-      }
-    }
-
-    // Deduplicate relationships
-    const uniqueRels = [...new Map(relationships.map((r) => [r.id, r])).values()];
+    const allRels = await this.sqliteStore.getRelationshipsForEntities([...entityIds]);
+    const uniqueRels = allRels.filter(
+      (r) => entityIds.has(r.sourceEntityId) && entityIds.has(r.targetEntityId),
+    );
 
     const relTokens = uniqueRels.reduce(
       (sum, r) => sum + estimateTokens(r.description ?? '') + 20,
@@ -165,23 +168,11 @@ export class QueryEngine {
    * entities matching ANY meaningful keyword are returned.
    */
   private buildFtsQuery(query: string): string {
-    const stopWords = new Set([
-      'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
-      'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been',
-      'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
-      'could', 'should', 'may', 'might', 'shall', 'can', 'need', 'must',
-      'what', 'which', 'who', 'how', 'why', 'when', 'where', 'that', 'this',
-      'these', 'those', 'it', 'its', 'me', 'my', 'you', 'your', 'we', 'our',
-      'they', 'their', 'he', 'she', 'i', 'all', 'any', 'each', 'some', 'no',
-      'not', 'so', 'yet', 'use', 'used', 'using', 'about', 'tell', 'know',
-      'get', 'got', 'make', 'made', 'see', 'give', 'go', 'come', 'take',
-    ]);
-
     const keywords = query
-      .replace(/[^a-zA-Z0-9\s]/g, ' ') // strip all non-alphanumeric chars (catches ?, !, ., etc.)
+      .replace(/[^a-zA-Z0-9\s]/g, ' ')
       .toLowerCase()
       .split(/\s+/)
-      .filter((w) => w.length >= 3 && !stopWords.has(w));
+      .filter((w) => w.length >= 3 && !FTS_STOP_WORDS.has(w));
 
     if (keywords.length === 0) {
       // Fallback: sanitize raw query for FTS5 safety

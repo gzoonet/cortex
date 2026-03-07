@@ -62,7 +62,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
       callback(new Error('CORS not allowed'));
     },
   }));
-  app.use(express.json());
+  app.use(express.json({ limit: '1mb' }));
 
   // Warn if non-localhost without auth
   const isLocal = host === '127.0.0.1' || host === 'localhost' || host === '::1';
@@ -78,6 +78,18 @@ export async function startServer(options: ServerOptions): Promise<void> {
   const rateLimitWindow = 60_000; // 1 minute
   const rateLimitMax = 30; // max requests per window
   const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+  // Periodically clean up expired rate limit entries to prevent memory leak
+  const rateLimitCleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of rateLimitMap) {
+      if (now >= entry.resetAt) {
+        rateLimitMap.delete(key);
+      }
+    }
+  }, 60_000);
+  rateLimitCleanupInterval.unref(); // Don't keep process alive for cleanup
+
   const rateLimiter: express.RequestHandler = (req, res, next) => {
     const key = req.ip ?? 'unknown';
     const now = Date.now();
@@ -192,6 +204,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
   // Graceful shutdown
   const shutdown = () => {
     logger.info('Shutting down...');
+    clearInterval(rateLimitCleanupInterval);
     relay.close();
     server.close();
     bundle.store.close();
