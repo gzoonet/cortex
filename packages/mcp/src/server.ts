@@ -7,6 +7,9 @@ import { handleFindEntity } from './tools/find.js';
 import { handleListProjects } from './tools/projects.js';
 import { handleGetStatus } from './tools/status.js';
 import { handleGetContradictions, handleResolveContradiction } from './tools/contradictions.js';
+import { handleSearchEntities } from './tools/search.js';
+import { handleIngestFile } from './tools/ingest.js';
+import { handleAddProject, handleRemoveProject } from './tools/manage.js';
 
 export function createCortexMcpServer(bundle: StoreBundle, router: Router): McpServer {
   const server = new McpServer({
@@ -135,6 +138,92 @@ export function createCortexMcpServer(bundle: StoreBundle, router: Router): McpS
     async ({ id, action }) => {
       const result = await handleResolveContradiction({ id, action }, bundle.store);
       return { content: [{ type: 'text' as const, text: result }] };
+    },
+  );
+
+  server.registerTool(
+    'search_entities',
+    {
+      title: 'Search Entities',
+      description:
+        'Search across all entities in the knowledge graph using full-text search. ' +
+        'Returns matching entities ranked by relevance. Use this for broad searches ' +
+        'when you don\'t know the exact entity name.',
+      inputSchema: {
+        query: z.string().describe('Search text (keywords, phrases)'),
+        limit: z.number().optional().describe('Max results to return (default: 20, max: 100)'),
+        type: z.string().optional().describe(
+          'Filter by entity type: Decision, Requirement, Pattern, Component, ' +
+          'Dependency, Interface, Constraint, ActionItem, Risk, Note',
+        ),
+      },
+    },
+    async ({ query, limit, type }) => {
+      const result = await handleSearchEntities({ query, limit, type }, bundle.store);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    'ingest_file',
+    {
+      title: 'Ingest File',
+      description:
+        'Trigger ingestion of a single file into the knowledge graph. Extracts entities ' +
+        'and relationships using LLMs. The file must belong to a registered project. ' +
+        'If projectId is omitted, Cortex auto-detects the project from the file path.',
+      inputSchema: {
+        filePath: z.string().describe('Absolute path to the file to ingest'),
+        projectId: z.string().optional().describe(
+          'Project ID to ingest into. If omitted, auto-detected from file path.',
+        ),
+      },
+    },
+    async ({ filePath, projectId }) => {
+      const result = await handleIngestFile({ filePath, projectId }, bundle.store, router);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    'add_project',
+    {
+      title: 'Add Project',
+      description:
+        'Register a new project directory for Cortex to watch and index. ' +
+        'The path must exist and be a directory.',
+      inputSchema: {
+        name: z.string().describe('Unique project name (e.g., "my-app", "api-server")'),
+        path: z.string().describe('Absolute path to the project root directory'),
+        privacyLevel: z.string().optional().describe(
+          'Privacy level: standard (default), sensitive, or restricted. ' +
+          'Restricted projects are never sent to cloud LLMs.',
+        ),
+      },
+    },
+    async ({ name, path, privacyLevel }) => {
+      const result = await handleAddProject(
+        { name, path, privacyLevel: privacyLevel as 'standard' | 'sensitive' | 'restricted' | undefined },
+        bundle.store,
+      );
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    'remove_project',
+    {
+      title: 'Remove Project',
+      description:
+        'Unregister a project from Cortex. Removes it from the project registry but ' +
+        'preserves all extracted entities in the knowledge graph.',
+      inputSchema: {
+        name: z.string().describe('Name of the project to remove'),
+      },
+    },
+    async ({ name }) => {
+      const result = await handleRemoveProject({ name });
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
     },
   );
 
