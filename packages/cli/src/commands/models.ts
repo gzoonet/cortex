@@ -120,7 +120,8 @@ async function runModelsPull(model: string, globals: GlobalOptions): Promise<voi
   }
 
   // Delegate to ollama CLI directly so the user sees progress
-  const result = spawnSync('ollama', ['pull', model], { stdio: 'inherit', shell: true });
+  // SECURITY: shell: false prevents command injection via crafted model names
+  const result = spawnSync('ollama', ['pull', model], { stdio: 'inherit' });
   if (result.status !== 0) {
     console.error(chalk.red(`\n✗ Failed to pull model "${model}"`));
     console.log(chalk.dim('  Make sure Ollama is running: ollama serve'));

@@ -154,6 +154,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
               batchSize: config.ingest.batchSize,
               projectPrivacyLevel: project.privacyLevel,
               mergeConfidenceThreshold: 0.85,
+              secretPatterns: config.privacy.secretPatterns,
             },
           );
 
