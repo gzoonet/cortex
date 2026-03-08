@@ -39,3 +39,4 @@ coverage/
 npm-debug.log*
 .claude/
 .cortex/
+.forge/
