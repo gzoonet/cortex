@@ -10,12 +10,45 @@ import { handleGetContradictions, handleResolveContradiction } from './tools/con
 import { handleSearchEntities } from './tools/search.js';
 import { handleIngestFile } from './tools/ingest.js';
 import { handleAddProject, handleRemoveProject } from './tools/manage.js';
+import { handleCortexAsk } from './tools/ask.js';
+import { handleSessionBrief } from './tools/brief.js';
+import { registerResources } from './resources.js';
 
 export function createCortexMcpServer(bundle: StoreBundle, router: Router): McpServer {
   const server = new McpServer({
     name: 'cortex',
     version: '0.1.0',
   });
+
+  // ── cortex_ask (unified query — preferred over find/search/query) ─────
+
+  server.registerTool(
+    'cortex_ask',
+    {
+      title: 'Ask Cortex',
+      description:
+        'Ask the Cortex knowledge graph any question in natural language. Returns an LLM-generated ' +
+        'answer plus matched entities (with types, relationships, source files), relevant contradictions, ' +
+        'and deduplicated file paths — all in one response. This is the primary way to query Cortex. ' +
+        'Use it for questions like "What functions depend on the User model?", "What tech decisions ' +
+        'have been made?", or "What contradictions exist in the auth flow?"',
+      inputSchema: {
+        question: z.string().describe('Natural language question about your codebase or project'),
+        projectId: z.string().optional().describe(
+          'Scope to a specific project. Get IDs from list_projects.',
+        ),
+      },
+    },
+    async ({ question, projectId }) => {
+      const result = await handleCortexAsk(
+        { question, projectId },
+        bundle.queryEngine,
+        router,
+        bundle.store,
+      );
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    },
+  );
 
   server.registerTool(
     'get_status',
@@ -50,9 +83,8 @@ export function createCortexMcpServer(bundle: StoreBundle, router: Router): McpS
     {
       title: 'Find Entity',
       description:
-        'Look up a specific entity by name or UUID in the Cortex knowledge graph. ' +
-        'Returns entity details and optionally its relationships to other entities. ' +
-        'Use this for precise lookups: decisions, patterns, components, dependencies.',
+        '[Deprecated — use cortex_ask instead] Look up a specific entity by name or UUID. ' +
+        'Returns entity details and optionally its relationships to other entities.',
       inputSchema: {
         name: z.string().describe('Entity name (fuzzy matched) or exact UUID'),
         expand: z.boolean().optional().describe(
@@ -75,10 +107,8 @@ export function createCortexMcpServer(bundle: StoreBundle, router: Router): McpS
     {
       title: 'Query Cortex Knowledge Graph',
       description:
-        'Answer a natural language question using the Cortex knowledge graph. ' +
-        'Returns an LLM-generated answer with cited entities. ' +
-        'Use this to understand decisions, architectural choices, patterns, and ' +
-        'dependencies across watched projects.',
+        '[Deprecated — use cortex_ask instead] Answer a natural language question ' +
+        'using the knowledge graph. Returns an LLM-generated answer with cited entities.',
       inputSchema: {
         question: z.string().describe('The natural language question to answer'),
         projectId: z.string().optional().describe(
@@ -146,9 +176,8 @@ export function createCortexMcpServer(bundle: StoreBundle, router: Router): McpS
     {
       title: 'Search Entities',
       description:
-        'Search across all entities in the knowledge graph using full-text search. ' +
-        'Returns matching entities ranked by relevance. Use this for broad searches ' +
-        'when you don\'t know the exact entity name.',
+        '[Deprecated — use cortex_ask instead] Full-text search across entities. ' +
+        'Returns matching entities ranked by relevance.',
       inputSchema: {
         query: z.string().describe('Search text (keywords, phrases)'),
         limit: z.number().optional().describe('Max results to return (default: 20, max: 100)'),
@@ -226,6 +255,31 @@ export function createCortexMcpServer(bundle: StoreBundle, router: Router): McpS
       return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
     },
   );
+
+  // ── session_brief ───────────────────────────────────────────────────────
+
+  server.registerTool(
+    'session_brief',
+    {
+      title: 'Session Brief',
+      description:
+        'Get a comprehensive session briefing from the knowledge graph. Returns key decisions, ' +
+        'active patterns, open contradictions, risks, action items, and recent file changes. ' +
+        'Use this to quickly understand project state without reading individual entities.',
+      inputSchema: {
+        projectId: z.string().optional().describe(
+          'Scope to a specific project. If omitted, shows cross-project summary.',
+        ),
+      },
+    },
+    async ({ projectId }) => {
+      const result = await handleSessionBrief(bundle.store, projectId);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    },
+  );
+
+  // Register resources (cortex://brief)
+  registerResources(server, bundle);
 
   return server;
 }

@@ -713,6 +713,16 @@ export class SQLiteStore implements GraphStore {
     return rows.map(rowToFile);
   }
 
+  async getRecentFiles(sinceDays: number = 7, limit: number = 20): Promise<FileRecord[]> {
+    const since = new Date(Date.now() - sinceDays * 86400000).toISOString();
+    const rows = this.db.prepare(
+      `SELECT * FROM files
+       WHERE status = 'ingested' AND last_ingested_at >= ?
+       ORDER BY last_ingested_at DESC LIMIT ?`,
+    ).all(since, limit) as FileRow[];
+    return rows.map(rowToFile);
+  }
+
   // --- Projects ---
 
   async createProject(

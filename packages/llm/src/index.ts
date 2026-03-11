@@ -19,3 +19,4 @@ export * as contradictionDetectionPrompt from './prompts/contradiction-detection
 export * as conversationalQueryPrompt from './prompts/conversational-query.js';
 export * as contextRankingPrompt from './prompts/context-ranking.js';
 export * as followUpGenerationPrompt from './prompts/follow-up-generation.js';
+export * as unifiedQueryPrompt from './prompts/unified-query.js';

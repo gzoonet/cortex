@@ -1,0 +1,17 @@
+{
+  "description": "Cortex Auto-Ingest — automatically ingests files Claude reads or edits into the knowledge graph",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Read|Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/post-tool-use.mjs",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

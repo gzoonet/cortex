@@ -9,6 +9,8 @@ const CLI_PATH = resolve(import.meta.dirname, '../../packages/cli/dist/index.js'
 
 function runCLI(args: string, options: { cwd?: string; env?: Record<string, string> } = {}): string {
   const env = { ...process.env, ...options.env };
+  // Remove CORTEX_CONFIG_PATH so the CLI finds config via cwd (tempDir), not the repo root
+  delete env['CORTEX_CONFIG_PATH'];
   return execSync(`node "${CLI_PATH}" ${args}`, {
     cwd: options.cwd ?? process.cwd(),
     env,
@@ -131,7 +133,12 @@ describe('CLI Integration', () => {
 
   describe('cortex contradictions', () => {
     it('should return empty list', () => {
-      const output = runCLI('contradictions --json', { cwd: tempDir });
+      // Use a fresh temp database so we don't pick up contradictions from prior runs
+      const tempDbPath = join(tempDir, 'test-cortex.db');
+      const output = runCLI('contradictions --json', {
+        cwd: tempDir,
+        env: { CORTEX_DB_PATH: tempDbPath },
+      });
       const data = JSON.parse(output);
       expect(data.contradictions).toEqual([]);
     });

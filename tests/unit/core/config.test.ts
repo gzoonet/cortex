@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -6,14 +6,26 @@ import { loadConfig, getDefaultConfig, cortexConfigSchema } from '@cortex/core';
 
 describe('Config Loader', () => {
   let tempDir: string;
+  let savedConfigPath: string | undefined;
+  let cwdSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     tempDir = join(tmpdir(), `cortex-test-${Date.now()}`);
     mkdirSync(tempDir, { recursive: true });
+    // Isolate tests from any real config:
+    // 1. Remove CORTEX_CONFIG_PATH env var so it doesn't override configDir
+    savedConfigPath = process.env['CORTEX_CONFIG_PATH'];
+    delete process.env['CORTEX_CONFIG_PATH'];
+    // 2. Mock cwd() to prevent findConfigFile from falling back to the repo root
+    cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(tempDir);
   });
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
+    cwdSpy.mockRestore();
+    if (savedConfigPath !== undefined) {
+      process.env['CORTEX_CONFIG_PATH'] = savedConfigPath;
+    }
   });
 
   it('should return defaults when no config file exists', () => {
