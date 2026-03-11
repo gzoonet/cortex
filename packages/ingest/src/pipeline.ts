@@ -156,6 +156,12 @@ export class IngestionPipeline {
       };
     }
 
+    // Acquire file-level lock to prevent concurrent ingestion of the same file
+    if (!this.store.tryAcquireFileLock(filePath)) {
+      logger.info('File is being processed by another process, skipping', { filePath });
+      return { fileId: '', entityIds: [], relationshipIds: [], status: 'skipped', error: 'Already being processed' };
+    }
+
     const relativePath = relative(this.options.projectRoot, filePath);
 
     try {
@@ -190,12 +196,15 @@ export class IngestionPipeline {
       const deduped = this.deduplicateEntities(allEntities);
       logger.debug('Extracted entities', { filePath, raw: allEntities.length, deduped: deduped.length });
 
-      // Store entities in a transaction for atomicity and performance
-      // (better-sqlite3 operations are synchronous, so await resolves immediately)
+      // Store entities in a transaction for atomicity and performance.
+      // Delete old entities first to prevent duplicates on re-ingest.
       const storedEntities: Entity[] = [];
       this.store.transaction(() => {
+        // Remove old entities/relationships for this file before inserting new ones
+        if (existingFile) {
+          this.store.deleteEntitiesBySourceFile(filePath);
+        }
         for (const entity of deduped) {
-          // createEntity is sync under the hood (better-sqlite3)
           storedEntities.push(this.store.createEntitySync(entity));
         }
       });
@@ -268,6 +277,9 @@ export class IngestionPipeline {
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       logger.error('Ingestion failed', { filePath, error: errorMsg });
+
+      // Release the processing lock so the file can be retried
+      this.store.releaseFileLock(filePath);
 
       // Record failed file
       await this.store.upsertFile({

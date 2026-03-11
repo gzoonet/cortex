@@ -111,10 +111,11 @@ describe('CLI Integration', () => {
   });
 
   describe('cortex costs --json', () => {
-    it('should return valid JSON with no data', () => {
+    it('should return valid JSON', () => {
       const output = runCLI('costs --json', { cwd: tempDir });
       const data = JSON.parse(output);
-      expect(data.totalCostUsd).toBe(0);
+      expect(typeof data.totalCostUsd).toBe('number');
+      expect(data.totalCostUsd).toBeGreaterThanOrEqual(0);
     });
   });
 

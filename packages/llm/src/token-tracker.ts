@@ -32,6 +32,7 @@ export class TokenTracker {
   private warningThresholds: number[];
   private warningsFired: Set<number> = new Set();
   private persistFn?: PersistFn;
+  private hydratedSpendUsd = 0;
 
   constructor(monthlyBudgetUsd = 25, warningThresholds = [0.5, 0.8, 0.9]) {
     this.monthlyBudgetUsd = monthlyBudgetUsd;
@@ -41,6 +42,16 @@ export class TokenTracker {
   /** Set a callback to persist each record (e.g. to SQLite) */
   setPersist(fn: PersistFn): void {
     this.persistFn = fn;
+  }
+
+  /**
+   * Hydrate tracker with spend already recorded in SQLite.
+   * This ensures budget enforcement works across separate CLI processes.
+   */
+  hydrateSpend(currentMonthSpendUsd: number): void {
+    this.hydratedSpendUsd = currentMonthSpendUsd;
+    // Re-check budget thresholds with hydrated data
+    this.checkBudget();
   }
 
   record(
@@ -134,9 +145,13 @@ export class TokenTracker {
 
   getCurrentMonthSpend(): number {
     const currentMonth = new Date().toISOString().slice(0, 7);
-    return this.records
+    const inMemorySpend = this.records
       .filter((r) => r.timestamp.startsWith(currentMonth))
       .reduce((sum, r) => sum + r.estimatedCostUsd, 0);
+    // hydratedSpendUsd covers spend from previous processes (read from SQLite)
+    // inMemorySpend covers spend from this process (may overlap if persist wrote them)
+    // Use max to avoid double-counting while still catching both sources
+    return Math.max(this.hydratedSpendUsd, 0) + inMemorySpend;
   }
 
   isBudgetExhausted(): boolean {

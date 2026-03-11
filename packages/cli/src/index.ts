@@ -25,8 +25,16 @@ import { fileURLToPath } from 'node:url';
 import type { Router } from '@cortex/llm';
 import type { SQLiteStore } from '@cortex/graph';
 
-/** Wire token tracking persistence: each LLM call is saved to SQLite */
+/** Wire token tracking persistence: each LLM call is saved to SQLite.
+ *  Also hydrates the tracker with this month's existing spend so budget
+ *  enforcement works correctly across separate CLI processes. */
 export function wireTokenPersistence(router: Router, store: SQLiteStore): void {
+  // Hydrate with existing spend from SQLite so budget checks work
+  const currentMonth = new Date().toISOString().slice(0, 7) + '-01T00:00:00.000Z';
+  const summary = store.getTokenUsageSummary(currentMonth);
+  router.getTracker().hydrateSpend(summary.totalCostUsd);
+
+  // Persist each new record to SQLite
   router.getTracker().setPersist((record) => {
     store.insertTokenUsage(record);
   });

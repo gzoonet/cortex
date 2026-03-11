@@ -582,6 +582,86 @@ export class SQLiteStore implements GraphStore {
     this.db.prepare('DELETE FROM relationships WHERE id = ?').run(id);
   }
 
+  /**
+   * Delete all entities (and their relationships + FTS entries) for a specific source file.
+   * Used during re-ingestion to replace stale entities atomically.
+   */
+  deleteEntitiesBySourceFile(sourceFile: string): { deletedEntities: number; deletedRelationships: number } {
+    return this.db.transaction(() => {
+      const relResult = this.db.prepare(`
+        DELETE FROM relationships
+        WHERE source_entity_id IN (SELECT id FROM entities WHERE source_file = ?)
+           OR target_entity_id IN (SELECT id FROM entities WHERE source_file = ?)
+      `).run(sourceFile, sourceFile);
+
+      this.db.prepare(`
+        DELETE FROM entities_fts
+        WHERE rowid IN (SELECT rowid FROM entities WHERE source_file = ? AND deleted_at IS NULL)
+      `).run(sourceFile);
+
+      const entityResult = this.db.prepare(
+        'DELETE FROM entities WHERE source_file = ?',
+      ).run(sourceFile);
+
+      // Also clean up contradictions referencing these entities
+      this.db.prepare(`
+        DELETE FROM contradictions
+        WHERE entity_a_id IN (SELECT id FROM entities WHERE source_file = ?)
+           OR entity_b_id IN (SELECT id FROM entities WHERE source_file = ?)
+      `).run(sourceFile, sourceFile);
+
+      return {
+        deletedEntities: entityResult.changes,
+        deletedRelationships: relResult.changes,
+      };
+    })();
+  }
+
+  /**
+   * Atomically try to acquire a processing lock for a file path.
+   * Returns true if lock acquired (status set to 'processing'), false if already locked.
+   * Uses SQLite's atomic UPDATE to prevent races between concurrent processes.
+   */
+  tryAcquireFileLock(filePath: string): boolean {
+    // Try to update an existing file record to 'processing'
+    const result = this.db.prepare(`
+      UPDATE files SET status = 'processing'
+      WHERE path = ? AND status != 'processing'
+    `).run(filePath);
+
+    if (result.changes > 0) return true;
+
+    // Check if the file exists at all — if not, insert a placeholder lock
+    const exists = this.db.prepare('SELECT 1 FROM files WHERE path = ?').get(filePath);
+    if (!exists) {
+      try {
+        this.db.prepare(`
+          INSERT INTO files (id, path, relative_path, project_id, content_hash, file_type, size_bytes, last_modified, status)
+          VALUES (?, ?, '', '', '', '', 0, '', 'processing')
+        `).run(randomUUID(), filePath);
+        return true;
+      } catch {
+        // Another process beat us to the insert
+        return false;
+      }
+    }
+
+    // File exists and status is already 'processing' — another process has the lock
+    return false;
+  }
+
+  /**
+   * Release a file processing lock (called after ingestion completes or fails).
+   * The upsertFile() call at the end of ingestion will set the final status.
+   */
+  releaseFileLock(filePath: string): void {
+    // Only release if still in 'processing' state (i.e., ingestion didn't complete)
+    this.db.prepare(`
+      UPDATE files SET status = 'pending'
+      WHERE path = ? AND status = 'processing'
+    `).run(filePath);
+  }
+
   deleteBySourcePath(pathPrefix: string): {
     deletedEntities: number;
     deletedRelationships: number;
@@ -696,6 +776,17 @@ export class SQLiteStore implements GraphStore {
     );
 
     return { ...file, id };
+  }
+
+  /**
+   * Check if a file has already been ingested with the given content hash.
+   * Synchronous for use in cost estimation without async overhead.
+   */
+  isFileCached(filePath: string, contentHash: string): boolean {
+    const row = this.db.prepare(
+      "SELECT 1 FROM files WHERE path = ? AND content_hash = ? AND status = 'ingested'",
+    ).get(filePath, contentHash);
+    return !!row;
   }
 
   async getFile(path: string): Promise<FileRecord | null> {

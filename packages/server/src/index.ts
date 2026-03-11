@@ -36,6 +36,11 @@ function createBundle(config: CortexConfig): ServerBundle {
   const vectorStore = new VectorStore();
   const queryEngine = new QueryEngine(store, vectorStore);
   const router = new LLMRouter({ config });
+  // Hydrate tracker with existing spend so budget enforcement works
+  const currentMonth = new Date().toISOString().slice(0, 7) + '-01T00:00:00.000Z';
+  const summary = store.getTokenUsageSummary(currentMonth);
+  router.getTracker().hydrateSpend(summary.totalCostUsd);
+
   // Persist token usage to SQLite so costs accumulate across sessions
   router.getTracker().setPersist((record) => {
     store.insertTokenUsage(record);
