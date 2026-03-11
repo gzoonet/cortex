@@ -2,7 +2,7 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const root = 'c:/Users/eddy/Documents/AI_Agent/gzoo-cortex';
+const root = path.resolve(__dirname, '..');
 
 // Read root package.json to get all dependencies
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8'));
@@ -16,7 +16,11 @@ const externals = allDeps.map(d => '--external:' + d).join(' ');
 // Rebuild web dashboard so npm publish always ships fresh assets
 // Safe: no user input involved, hardcoded command string
 console.log('Building web dashboard...');
-execSync('npm run build --workspace=packages/web', { cwd: root, stdio: 'inherit' });
+try {
+  execSync('npm run build --workspace=packages/web', { cwd: root, stdio: 'inherit' });
+} catch {
+  console.warn('Warning: web dashboard build failed (missing native deps?) — skipping, CLI bundle continues');
+}
 
 execSync(
   `npx esbuild packages/cli/dist/index.js --bundle --platform=node --target=node20 --format=esm --outfile=dist/cortex.mjs ${externals}`,
