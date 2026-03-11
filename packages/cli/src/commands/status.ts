@@ -126,15 +126,18 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
     // Suppress log output in JSON mode so Router init logs don't pollute stdout
     if (globals.json) setGlobalLogLevel('error');
 
-    // Compute local savings estimate: tokens processed by Ollama × Haiku cloud rate
-    const router = new Router({ config });
-    const tracker = router.getTracker();
-    const summary = tracker.getSummary();
-    const localTokens = tracker.getRecords()
-      .filter((r) => r.provider === 'ollama')
-      .reduce((sum, r) => sum + r.inputTokens + r.outputTokens, 0);
+    // Read costs from SQLite (persisted across all CLI invocations)
+    const currentMonth = new Date().toISOString().slice(0, 7) + '-01T00:00:00.000Z';
+    const usageSummary = store.getTokenUsageSummary(currentMonth);
+
+    // Compute local savings from Ollama usage
+    const ollamaUsage = store.getTokenUsage(currentMonth)
+      .filter((r) => r.provider === 'ollama');
+    const localTokens = ollamaUsage.reduce((sum, r) => sum + r.input_tokens + r.output_tokens, 0);
     const HAIKU_RATE_PER_M = 2.4; // blended input+output Haiku rate
     const localSavingsUsd = (localTokens / 1_000_000) * HAIKU_RATE_PER_M;
+
+    const router = new Router({ config });
     const localProvider = router.getLocalProvider();
 
     // Break CodeQL taint chain: JSON.parse(JSON.stringify()) creates fresh
@@ -149,7 +152,7 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
     const safeProjects = JSON.parse(JSON.stringify(projects.map((p) => p.name))) as string[];
     const safeVectorSize = JSON.parse(JSON.stringify(vectorSizeBytes)) as number;
     const budgetLimitUsd = JSON.parse(JSON.stringify(config.llm.budget.monthlyLimitUsd)) as number;
-    const spentUsdSafe = JSON.parse(JSON.stringify(summary.totalCostUsd)) as number;
+    const spentUsdSafe = JSON.parse(JSON.stringify(usageSummary.totalCostUsd)) as number;
     const localSavingsSafe = Math.round((JSON.parse(JSON.stringify(localSavingsUsd)) as number) * 100) / 100;
     const numCtxSafe = JSON.parse(JSON.stringify(localProvider?.getNumCtx() ?? localNumCtx)) as number;
     const numGpuSafe = JSON.parse(JSON.stringify(localProvider?.getNumGpu() ?? localNumGpu)) as number;

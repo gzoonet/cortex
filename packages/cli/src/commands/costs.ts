@@ -186,17 +186,7 @@ async function runCosts(
 }
 
 function getUsageRows(store: SQLiteStore, periodStart: string | undefined): TokenUsageRow[] {
-  // Access the db through a lightweight query
-  // Since SQLiteStore doesn't expose raw DB, we'll use the store reference
-  // For now, return empty — token_usage table is populated by TokenTracker at runtime
-  // In a production system, we'd persist token records to the DB
-  // This is a stub that returns data if the table has been populated
-
-  // We access the internal database through a method we'll add
-  // For CLI purposes, we report "no data" if the table is empty
-  void store;
-  void periodStart;
-  return [];
+  return store.getTokenUsage(periodStart);
 }
 
 function getGroupKey(row: TokenUsageRow, groupBy: string): string {

@@ -24,15 +24,23 @@ export function estimateCost(
 
 const MAX_IN_MEMORY_RECORDS = 10_000;
 
+export type PersistFn = (record: TokenUsageRecord) => void;
+
 export class TokenTracker {
   private records: TokenUsageRecord[] = [];
   private monthlyBudgetUsd: number;
   private warningThresholds: number[];
   private warningsFired: Set<number> = new Set();
+  private persistFn?: PersistFn;
 
   constructor(monthlyBudgetUsd = 25, warningThresholds = [0.5, 0.8, 0.9]) {
     this.monthlyBudgetUsd = monthlyBudgetUsd;
     this.warningThresholds = warningThresholds;
+  }
+
+  /** Set a callback to persist each record (e.g. to SQLite) */
+  setPersist(fn: PersistFn): void {
+    this.persistFn = fn;
   }
 
   record(
@@ -62,6 +70,10 @@ export class TokenTracker {
     this.records.push(record);
     this.trimOldRecords();
     this.checkBudget();
+
+    if (this.persistFn) {
+      try { this.persistFn(record); } catch { /* don't fail on persist errors */ }
+    }
 
     return record;
   }

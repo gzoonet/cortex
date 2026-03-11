@@ -22,6 +22,15 @@ import { registerStopCommand, registerRestartCommand } from './commands/stop.js'
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Router } from '@cortex/llm';
+import type { SQLiteStore } from '@cortex/graph';
+
+/** Wire token tracking persistence: each LLM call is saved to SQLite */
+export function wireTokenPersistence(router: Router, store: SQLiteStore): void {
+  router.getTracker().setPersist((record) => {
+    store.insertTokenUsage(record);
+  });
+}
 
 export function getVersion(): string {
   let dir = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url));

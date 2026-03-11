@@ -7,6 +7,7 @@ import { loadConfig, findConfigFile, createLogger, setGlobalLogLevel, eventBus, 
 import { SQLiteStore } from '@cortex/graph';
 import { Router } from '@cortex/llm';
 import { FileWatcher, IngestionPipeline } from '@cortex/ingest';
+import { wireTokenPersistence } from '../index.js';
 import type { GlobalOptions } from '../index.js';
 
 const logger = createLogger('cli:watch');
@@ -84,6 +85,7 @@ async function runWatch(
 
   // Initialize router
   const router = new Router({ config });
+  wireTokenPersistence(router, store);
 
   // Ensure project exists
   const projects = await store.listProjects();

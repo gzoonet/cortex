@@ -6,6 +6,7 @@ import { loadConfig, createLogger, getProject } from '@cortex/core';
 import { SQLiteStore } from '@cortex/graph';
 import { Router } from '@cortex/llm';
 import { IngestionPipeline, getParser } from '@cortex/ingest';
+import { wireTokenPersistence } from '../index.js';
 import type { GlobalOptions } from '../index.js';
 
 const logger = createLogger('cli:ingest');
@@ -114,6 +115,7 @@ async function runIngest(
   });
 
   const router = new Router({ config });
+  wireTokenPersistence(router, store);
 
   // Resolve project record
   const projects = await store.listProjects();

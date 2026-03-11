@@ -36,6 +36,10 @@ function createBundle(config: CortexConfig): ServerBundle {
   const vectorStore = new VectorStore();
   const queryEngine = new QueryEngine(store, vectorStore);
   const router = new LLMRouter({ config });
+  // Persist token usage to SQLite so costs accumulate across sessions
+  router.getTracker().setPersist((record) => {
+    store.insertTokenUsage(record);
+  });
   return { store, queryEngine, router };
 }
 
@@ -201,6 +205,9 @@ export async function startServer(options: ServerOptions): Promise<void> {
     }
     if (enableWatch) {
       console.log(`  Watcher:   active`);
+    }
+    if (host === '127.0.0.1' || host === 'localhost') {
+      console.log(`\n  Tip: To access remotely, use --host 0.0.0.0 (or put behind a reverse proxy)`);
     }
     console.log('');
   });

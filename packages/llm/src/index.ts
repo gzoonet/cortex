@@ -7,7 +7,7 @@ export { OllamaProvider, type OllamaProviderOptions } from './providers/ollama.j
 export { OpenAICompatibleProvider, type OpenAICompatibleProviderOptions } from './providers/openai-compatible.js';
 
 // Utilities
-export { TokenTracker, estimateCost } from './token-tracker.js';
+export { TokenTracker, estimateCost, type PersistFn } from './token-tracker.js';
 export { ResponseCache, type ResponseCacheOptions } from './cache.js';
 export { parseStructuredOutput, buildCorrectionPrompt } from './output-parser.js';
 

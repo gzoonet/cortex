@@ -6,6 +6,7 @@ import { SQLiteStore } from '@cortex/graph';
 import { QueryEngine } from '@cortex/graph';
 import { VectorStore } from '@cortex/graph';
 import { Router, conversationalQueryPrompt, followUpGenerationPrompt } from '@cortex/llm';
+import { wireTokenPersistence } from '../index.js';
 import type { GlobalOptions } from '../index.js';
 
 const logger = createLogger('cli:query');
@@ -52,6 +53,7 @@ async function runQuery(
   await vectorStore.initialize();
   const queryEngine = new QueryEngine(store, vectorStore, { maxContextTokens: config.llm.maxContextTokens });
   const router = new Router({ config });
+  wireTokenPersistence(router, store);
 
   // Fetch graph stats for context
   const [graphStats, projects] = await Promise.all([

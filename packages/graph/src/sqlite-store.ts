@@ -1048,6 +1048,57 @@ export class SQLiteStore implements GraphStore {
     };
   }
 
+  // --- Token Usage ---
+
+  insertTokenUsage(record: {
+    id: string;
+    requestId: string;
+    task: string;
+    provider: string;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    estimatedCostUsd: number;
+    latencyMs: number;
+    timestamp: string;
+  }): void {
+    this.db.prepare(`
+      INSERT OR IGNORE INTO token_usage (id, request_id, task, provider, model, input_tokens, output_tokens, estimated_cost_usd, latency_ms, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(record.id, record.requestId, record.task, record.provider, record.model, record.inputTokens, record.outputTokens, record.estimatedCostUsd, record.latencyMs, record.timestamp);
+  }
+
+  getTokenUsage(since?: string): Array<{
+    id: string;
+    request_id: string;
+    task: string;
+    provider: string;
+    model: string;
+    input_tokens: number;
+    output_tokens: number;
+    estimated_cost_usd: number;
+    latency_ms: number;
+    timestamp: string;
+  }> {
+    if (since) {
+      return this.db.prepare(
+        'SELECT * FROM token_usage WHERE timestamp >= ? ORDER BY timestamp DESC',
+      ).all(since) as any[];
+    }
+    return this.db.prepare(
+      'SELECT * FROM token_usage ORDER BY timestamp DESC',
+    ).all() as any[];
+  }
+
+  getTokenUsageSummary(since?: string): { totalCostUsd: number; totalInputTokens: number; totalOutputTokens: number; requestCount: number } {
+    const whereClause = since ? 'WHERE timestamp >= ?' : '';
+    const params = since ? [since] : [];
+    const row = this.db.prepare(
+      `SELECT COALESCE(SUM(estimated_cost_usd), 0) as cost, COALESCE(SUM(input_tokens), 0) as input, COALESCE(SUM(output_tokens), 0) as output, COUNT(*) as count FROM token_usage ${whereClause}`,
+    ).get(...params) as { cost: number; input: number; output: number; count: number };
+    return { totalCostUsd: row.cost, totalInputTokens: row.input, totalOutputTokens: row.output, requestCount: row.count };
+  }
+
   // --- Graph visualization data ---
 
   getGraphData(options: { projectId?: string; limit?: number } = {}): {
