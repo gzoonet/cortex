@@ -157,7 +157,7 @@ export class IngestionPipeline {
     }
 
     // Acquire file-level lock to prevent concurrent ingestion of the same file
-    if (!this.store.tryAcquireFileLock(filePath)) {
+    if (!this.store.tryAcquireFileLock(filePath, this.options.projectId)) {
       logger.info('File is being processed by another process, skipping', { filePath });
       return { fileId: '', entityIds: [], relationshipIds: [], status: 'skipped', error: 'Already being processed' };
     }

@@ -621,8 +621,9 @@ export class SQLiteStore implements GraphStore {
    * Atomically try to acquire a processing lock for a file path.
    * Returns true if lock acquired (status set to 'processing'), false if already locked.
    * Uses SQLite's atomic UPDATE to prevent races between concurrent processes.
+   * projectId is required for new files (foreign key constraint on files table).
    */
-  tryAcquireFileLock(filePath: string): boolean {
+  tryAcquireFileLock(filePath: string, projectId: string): boolean {
     // Try to update an existing file record to 'processing'
     const result = this.db.prepare(`
       UPDATE files SET status = 'processing'
@@ -637,8 +638,8 @@ export class SQLiteStore implements GraphStore {
       try {
         this.db.prepare(`
           INSERT INTO files (id, path, relative_path, project_id, content_hash, file_type, size_bytes, last_modified, status)
-          VALUES (?, ?, '', '', '', '', 0, '', 'processing')
-        `).run(randomUUID(), filePath);
+          VALUES (?, ?, '', ?, '', '', 0, '', 'processing')
+        `).run(randomUUID(), filePath, projectId);
         return true;
       } catch {
         // Another process beat us to the insert
