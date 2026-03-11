@@ -23,7 +23,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-function getVersion(): string {
+export function getVersion(): string {
   let dir = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
     try {

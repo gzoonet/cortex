@@ -73,6 +73,7 @@
     "cors": "^2.8.5",
     "express": "^4.21.0",
     "inquirer": "^13.3.0",
+    "lightningcss": "^1.32.0",
     "openai": "^4.0.0",
     "ora": "^9.3.0",
     "remark-parse": "^11.0.0",

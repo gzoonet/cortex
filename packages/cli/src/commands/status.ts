@@ -1,10 +1,12 @@
 import { Command } from 'commander';
 import { resolve } from 'node:path';
-import { statSync } from 'node:fs';
+import { statSync, readFileSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import chalk from 'chalk';
 import { loadConfig, createLogger, setGlobalLogLevel } from '@cortex/core';
 import { SQLiteStore } from '@cortex/graph';
 import { Router } from '@cortex/llm';
+import { getVersion } from '../index.js';
 import type { GlobalOptions } from '../index.js';
 
 const logger = createLogger('cli:status');
@@ -22,6 +24,31 @@ function sanitizeUrl(url: string): string {
     return parsed.toString().replace(/\/$/, '');
   } catch {
     return '[invalid-url]';
+  }
+}
+
+async function checkServerRunning(port: number): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2000);
+    const response = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function getServerPid(): number | null {
+  try {
+    const pidPath = resolve(homedir(), '.cortex', 'cortex.pid');
+    if (!existsSync(pidPath)) return null;
+    const pid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10);
+    if (isNaN(pid)) return null;
+    // Check if process is still alive
+    try { process.kill(pid, 0); return pid; } catch { return null; }
+  } catch {
+    return null;
   }
 }
 
@@ -91,6 +118,11 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
       mode !== 'cloud-first' ? await checkOllamaAvailable(config.llm.local.host) : false,
     )) as boolean;
 
+    // Check web server status
+    const serverPort = Number(config.server?.port ?? 3710);
+    const serverPid = getServerPid();
+    const serverReachable = serverPid ? await checkServerRunning(serverPort) : false;
+
     // Suppress log output in JSON mode so Router init logs don't pollute stdout
     if (globals.json) setGlobalLogLevel('error');
 
@@ -124,6 +156,7 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
 
     if (globals.json) {
       console.log(JSON.stringify({
+        version: getVersion(),
         graph: {
           entities: safeStats.entityCount,
           relationships: safeStats.relationshipCount,
@@ -151,6 +184,12 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
             numCtx: numCtxSafe,
           },
         },
+        server: {
+          running: serverReachable,
+          pid: serverPid,
+          port: serverPort,
+          url: serverReachable ? `http://127.0.0.1:${serverPort}` : null,
+        },
         budget: {
           monthlyLimitUsd: budgetLimitUsd,
           spentThisMonthUsd: spentUsdSafe,
@@ -162,8 +201,9 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
     }
 
     // Header
+    const version = getVersion();
     console.log('');
-    console.log(chalk.bold.cyan('CORTEX STATUS'));
+    console.log(chalk.bold.cyan('CORTEX STATUS') + chalk.dim(` v${version}`));
     console.log(chalk.dim('─'.repeat(50)));
 
     // Graph stats
@@ -194,6 +234,26 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
       chalk.white('Storage:   ') +
       `${formatBytes(stats.dbSizeBytes)} (SQLite) | ${formatBytes(vectorSizeBytes)} (vectors)`,
     );
+
+    // Web GUI
+    if (serverReachable) {
+      console.log(
+        chalk.white('Web GUI:   ') +
+        chalk.green('✓') + ` http://127.0.0.1:${serverPort}` +
+        chalk.dim(` (pid ${serverPid})`),
+      );
+    } else if (serverPid) {
+      console.log(
+        chalk.white('Web GUI:   ') +
+        chalk.yellow('⚠') + ` pid ${serverPid} found but not responding on port ${serverPort}`,
+      );
+    } else {
+      console.log(
+        chalk.white('Web GUI:   ') +
+        chalk.dim('not running') +
+        chalk.dim(` — start with: cortex serve`),
+      );
+    }
 
     console.log('');
 
