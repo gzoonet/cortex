@@ -57,6 +57,9 @@ export async function startServer(options: ServerOptions): Promise<void> {
   const app = express();
   const server = createServer(app);
 
+  // Trust reverse proxy (nginx) — required for correct IP detection and rate limiting
+  app.set('trust proxy', 1);
+
   // Middleware — CORS
   const corsOrigin = config.server?.cors ?? [];
   app.use(cors({
@@ -69,6 +72,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
       if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
         return callback(null, true);
       }
+      logger.warn('CORS rejected', { origin, allowed: corsOrigin });
       callback(new Error('CORS not allowed'));
     },
   }));

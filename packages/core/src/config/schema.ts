@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const ingestConfigSchema = z.object({
   watchDirs: z.array(z.string()).default(['.']),
   exclude: z.array(z.string()).default([
-    'node_modules', 'dist', 'build', 'out', '.git',
+    'node_modules', '.next', 'dist', 'build', 'out', '.git',
     '*.min.js', '*.min.css', '*.map',
     'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
     '__pycache__', '*.pyc', '.DS_Store', 'Thumbs.db',

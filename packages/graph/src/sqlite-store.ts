@@ -599,16 +599,16 @@ export class SQLiteStore implements GraphStore {
         WHERE rowid IN (SELECT rowid FROM entities WHERE source_file = ? AND deleted_at IS NULL)
       `).run(sourceFile);
 
+      // Clean up contradictions BEFORE deleting entities (subquery needs them to exist)
+      this.db.prepare(`
+        DELETE FROM contradictions
+        WHERE entity_id_a IN (SELECT id FROM entities WHERE source_file = ?)
+           OR entity_id_b IN (SELECT id FROM entities WHERE source_file = ?)
+      `).run(sourceFile, sourceFile);
+
       const entityResult = this.db.prepare(
         'DELETE FROM entities WHERE source_file = ?',
       ).run(sourceFile);
-
-      // Also clean up contradictions referencing these entities
-      this.db.prepare(`
-        DELETE FROM contradictions
-        WHERE entity_a_id IN (SELECT id FROM entities WHERE source_file = ?)
-           OR entity_b_id IN (SELECT id FROM entities WHERE source_file = ?)
-      `).run(sourceFile, sourceFile);
 
       return {
         deletedEntities: entityResult.changes,
