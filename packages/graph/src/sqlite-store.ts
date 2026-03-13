@@ -839,17 +839,32 @@ export class SQLiteStore implements GraphStore {
 
   async getProject(id: string): Promise<Project | null> {
     const row = this.db.prepare(
-      'SELECT * FROM projects WHERE id = ?',
-    ).get(id) as ProjectRow | undefined;
+      `SELECT p.*,
+        (SELECT COUNT(*) FROM files WHERE project_id = p.id) AS live_file_count,
+        (SELECT COUNT(*) FROM entities WHERE project_id = p.id AND deleted_at IS NULL AND status != 'deleted') AS live_entity_count
+      FROM projects p WHERE p.id = ?`,
+    ).get(id) as (ProjectRow & { live_file_count: number; live_entity_count: number }) | undefined;
 
-    return row ? rowToProject(row) : null;
+    if (!row) return null;
+    return {
+      ...rowToProject(row),
+      fileCount: row.live_file_count,
+      entityCount: row.live_entity_count,
+    };
   }
 
   async listProjects(): Promise<Project[]> {
     const rows = this.db.prepare(
-      'SELECT * FROM projects ORDER BY created_at DESC',
-    ).all() as ProjectRow[];
-    return rows.map(rowToProject);
+      `SELECT p.*,
+        (SELECT COUNT(*) FROM files WHERE project_id = p.id) AS live_file_count,
+        (SELECT COUNT(*) FROM entities WHERE project_id = p.id AND deleted_at IS NULL AND status != 'deleted') AS live_entity_count
+      FROM projects p ORDER BY p.created_at DESC`,
+    ).all() as (ProjectRow & { live_file_count: number; live_entity_count: number })[];
+    return rows.map((row) => ({
+      ...rowToProject(row),
+      fileCount: row.live_file_count,
+      entityCount: row.live_entity_count,
+    }));
   }
 
   // --- Contradictions ---
