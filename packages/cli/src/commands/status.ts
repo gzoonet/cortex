@@ -177,11 +177,9 @@ async function runStatus(globals: GlobalOptions): Promise<void> {
           mode,
           cloud: {
             provider: cloudProvider,
-            available: hasApiKey,
           },
           local: {
             provider: 'ollama',
-            available: ollamaAvailable,
             host: localHost,
             model: localModel,
             numCtx: numCtxSafe,
