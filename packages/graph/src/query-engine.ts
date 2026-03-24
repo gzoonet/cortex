@@ -168,7 +168,7 @@ export class QueryEngine {
    * entities matching ANY meaningful keyword are returned.
    */
   private buildFtsQuery(query: string): string {
-    const keywords = query
+    const keywords = (query ?? '')
       .replace(/[^a-zA-Z0-9\s]/g, ' ')
       .toLowerCase()
       .split(/\s+/)

@@ -453,7 +453,7 @@ export class IngestionPipeline {
     const seen = new Map<string, Omit<Entity, 'id' | 'createdAt' | 'updatedAt'>>();
 
     for (const entity of entities) {
-      const key = `${entity.type}:${entity.name.toLowerCase()}`;
+      const key = `${entity.type}:${(entity.name ?? '').toLowerCase()}`;
       const existing = seen.get(key);
 
       if (!existing || entity.confidence > existing.confidence) {
