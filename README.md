@@ -34,6 +34,10 @@ and gives it back to you when you need it.
 - **Web dashboard** with knowledge graph visualization, live feed, and query explorer
 - **MCP server** for direct integration with Claude Code
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/gzoonet-cortex).
+
 ## Quick Start
 
 ### 1. Install
