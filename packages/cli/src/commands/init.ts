@@ -58,6 +58,16 @@ const CLOUD_PRESETS = {
     label: 'Groq',
     hint: 'Fast inference, free tier available',
   },
+  deepseek: {
+    provider: 'openai-compatible',
+    baseUrl: 'https://api.deepseek.com/v1',
+    apiKeySource: 'env:CORTEX_DEEPSEEK_API_KEY',
+    envVar: 'CORTEX_DEEPSEEK_API_KEY',
+    models: { primary: 'deepseek-reasoner', fast: 'deepseek-chat' },
+    promptCaching: false,
+    label: 'DeepSeek',
+    hint: 'Strong reasoning, very affordable',
+  },
   openrouter: {
     provider: 'openai-compatible',
     baseUrl: 'https://openrouter.ai/api/v1',
