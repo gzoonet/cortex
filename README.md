@@ -59,7 +59,7 @@ cortex init
 ```
 
 This walks you through:
-- **LLM provider** — Anthropic, Google Gemini, Groq, OpenRouter, or Ollama (local)
+- **LLM provider** — Anthropic, Google Gemini, DeepSeek, Groq, OpenRouter, or Ollama (local)
 - **API key** — saved securely to `~/.cortex/.env`
 - **Routing mode** — cloud-first, hybrid, local-first, or local-only
 - **Watch directories** — which directories Cortex should monitor
@@ -122,6 +122,8 @@ Cortex is **provider-agnostic**. It supports:
 
 - **Anthropic Claude** (Sonnet, Haiku) — via native Anthropic API
 - **Google Gemini** — via OpenAI-compatible API
+- **DeepSeek** (Reasoner, Chat) — strong reasoning, very affordable
+- **Groq** — fast inference with free tier
 - **Any OpenAI-compatible API** — OpenRouter, local proxies, etc.
 - **Ollama** (Mistral, Llama, etc.) — fully local, no cloud required
 
@@ -140,7 +142,7 @@ and reasoning-heavy tasks (relationship inference, queries) to your cloud provid
 ## Requirements
 
 - **Node.js** 20+
-- **LLM API key** for cloud modes — Anthropic, Google Gemini, or any OpenAI-compatible provider
+- **LLM API key** for cloud modes — Anthropic, Google Gemini, DeepSeek, Groq, or any OpenAI-compatible provider
 - **Ollama** (for hybrid/local modes) — [install](https://ollama.ai/)
 
 ## Configuration
@@ -164,7 +166,10 @@ Full configuration reference: [docs/configuration.md](docs/configuration.md)
 | `cortex init` | Interactive setup wizard |
 | `cortex projects add <name> [path]` | Register a project directory |
 | `cortex projects list` | List registered projects |
+| `cortex projects remove <name>` | Unregister a project |
+| `cortex projects show <name>` | Show project details |
 | `cortex watch [project]` | Start watching for file changes |
+| `cortex stop` | Stop a running watch process |
 | `cortex query <question>` | Natural language query with citations |
 | `cortex find <term>` | Find entities by name |
 | `cortex ingest <file-or-glob>` | One-shot file ingestion |
@@ -198,10 +203,25 @@ Run `cortex serve` to open a full web dashboard at `http://localhost:3710` with:
 Cortex includes an MCP server so Claude Code can query your knowledge graph directly:
 
 ```bash
-claude mcp add cortex --scope user -- node /path/to/packages/mcp/dist/index.js
+claude mcp add cortex --scope user -- npx @gzoo/cortex mcp
 ```
 
-This gives Claude Code 4 tools: `get_status`, `list_projects`, `find_entity`, `query_cortex`.
+This gives Claude Code 12 tools:
+
+| Tool | Description |
+|------|-------------|
+| `cortex_ask` | Natural language questions about your projects |
+| `get_status` | System status and graph stats |
+| `list_projects` | List registered projects |
+| `find_entity` | Look up entities by name |
+| `query_cortex` | Structured knowledge graph queries |
+| `get_contradictions` | List detected contradictions |
+| `resolve_contradiction` | Resolve a contradiction |
+| `search_entities` | Search entities with filters |
+| `ingest_file` | Trigger file ingestion |
+| `add_project` | Register a new project |
+| `remove_project` | Unregister a project |
+| `session_brief` | Context summary for current session |
 
 ## Architecture
 
@@ -211,8 +231,8 @@ Monorepo with eight packages:
 - **@cortex/ingest** — file parsers (tree-sitter + remark), chunker, watcher, pipeline
 - **@cortex/graph** — SQLite store, LanceDB vectors, query engine
 - **@cortex/llm** — Anthropic/Gemini/OpenAI-compatible/Ollama providers, router, prompts, cache
-- **@cortex/cli** — Commander.js CLI with 17 commands
-- **@cortex/mcp** — Model Context Protocol server (stdio transport)
+- **@cortex/cli** — Commander.js CLI with 18 commands
+- **@cortex/mcp** — Model Context Protocol server (stdio transport, 12 tools)
 - **@cortex/server** — Express REST API + WebSocket relay
 - **@cortex/web** — React + Vite + D3 web dashboard
 
@@ -233,6 +253,8 @@ Full security architecture: [docs/security.md](docs/security.md)
 - [LanceDB](https://lancedb.com/) — vector embeddings for semantic search
 - [Anthropic Claude](https://anthropic.com/) — cloud LLM provider
 - [Google Gemini](https://ai.google.dev/) — cloud LLM provider (via OpenAI-compatible API)
+- [DeepSeek](https://deepseek.com/) — cloud LLM provider (reasoning + chat)
+- [Groq](https://groq.com/) — fast cloud inference
 - [Ollama](https://ollama.ai/) — local LLM inference
 - [tree-sitter](https://tree-sitter.github.io/) — language-aware file parsing
 - [Chokidar](https://github.com/paulmillr/chokidar) — cross-platform file watching
