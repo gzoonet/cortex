@@ -7,8 +7,10 @@ import {
   removeProject,
   listProjects,
   getProject,
+  loadConfig,
   createLogger,
 } from '@cortex/core';
+import { SQLiteStore } from '@cortex/graph';
 import type { GlobalOptions } from '../index.js';
 
 const logger = createLogger('cli:projects');
@@ -99,53 +101,101 @@ async function runAdd(name: string, path: string | undefined, globals: GlobalOpt
     process.exit(1);
   }
 
-  // Check if already registered
+  // Check if already registered in file registry
   const existing = getProject(name);
-  if (existing) {
-    console.error(chalk.red(`Error: Project "${name}" is already registered at ${existing.path}`));
-    console.log(chalk.dim('Use a different name or remove the existing project first.'));
-    process.exit(1);
-  }
 
   // Check for config file
   const configPath = join(projectPath, 'cortex.config.json');
   const hasConfig = existsSync(configPath);
 
-  const entry = addProject(name, projectPath, hasConfig ? configPath : undefined);
+  const config = loadConfig({ configDir: globals.config ? resolve(globals.config) : undefined });
+  const store = new SQLiteStore({ dbPath: config.graph.dbPath, backupOnStartup: false });
 
-  if (globals.json) {
-    console.log(JSON.stringify(entry, null, 2));
-    return;
-  }
+  try {
+    const dbProject = await store.getProjectByName(name);
 
-  console.log(chalk.green(`✓ Project "${name}" registered`));
-  console.log(`   Path: ${projectPath}`);
-  
-  if (!hasConfig) {
-    console.log('');
-    console.log(chalk.yellow('⚠ No cortex.config.json found in this directory.'));
-    console.log(chalk.dim(`Run 'cd ${projectPath} && cortex init' to create one.`));
-  } else {
-    console.log('');
-    console.log(chalk.dim(`Start watching with: cortex watch ${name}`));
+    if (existing && dbProject) {
+      console.error(chalk.red(`Error: Project "${name}" is already registered at ${existing.path}`));
+      console.log(chalk.dim('Use a different name or remove the existing project first.'));
+      process.exit(1);
+    }
+
+    // Add to file registry if not already there
+    if (!existing) {
+      addProject(name, projectPath, hasConfig ? configPath : undefined);
+    }
+
+    // Add to DB if not already there (handles re-sync)
+    if (!dbProject) {
+      await store.createProject({
+        name,
+        rootPath: projectPath,
+        privacyLevel: 'standard',
+        fileCount: 0,
+        entityCount: 0,
+      });
+    }
+
+    if (globals.json) {
+      const entry = getProject(name);
+      console.log(JSON.stringify(entry, null, 2));
+      return;
+    }
+
+    if (existing && !dbProject) {
+      console.log(chalk.green(`✓ Project "${name}" synced to database`));
+    } else {
+      console.log(chalk.green(`✓ Project "${name}" registered`));
+    }
+    console.log(`   Path: ${projectPath}`);
+
+    if (!hasConfig) {
+      console.log('');
+      console.log(chalk.yellow('⚠ No cortex.config.json found in this directory.'));
+      console.log(chalk.dim(`Run 'cd ${projectPath} && cortex init' to create one.`));
+    } else {
+      console.log('');
+      console.log(chalk.dim(`Start watching with: cortex watch ${name}`));
+    }
+  } finally {
+    store.close();
   }
 }
 
 async function runRemove(name: string, globals: GlobalOptions): Promise<void> {
-  const removed = removeProject(name);
+  const existing = getProject(name);
 
-  if (!removed) {
-    console.error(chalk.red(`Error: Project "${name}" is not registered.`));
-    process.exit(1);
+  const config = loadConfig({ configDir: globals.config ? resolve(globals.config) : undefined });
+  const store = new SQLiteStore({ dbPath: config.graph.dbPath, backupOnStartup: false });
+
+  try {
+    const dbProject = await store.getProjectByName(name);
+
+    if (!existing && !dbProject) {
+      console.error(chalk.red(`Error: Project "${name}" is not registered.`));
+      process.exit(1);
+    }
+
+    // Remove from file registry
+    if (existing) {
+      removeProject(name);
+    }
+
+    // Remove from DB
+    if (dbProject) {
+      await store.deleteProject(dbProject.id);
+    }
+
+    if (globals.json) {
+      console.log(JSON.stringify({ removed: name }));
+      return;
+    }
+
+    console.log(chalk.green(`✓ Project "${name}" unregistered`));
+    console.log(chalk.dim('Note: This only removes the registration. Project files are unchanged.'));
+  } finally {
+    store.close();
   }
-
-  if (globals.json) {
-    console.log(JSON.stringify({ removed: name }));
-    return;
-  }
-
-  console.log(chalk.green(`✓ Project "${name}" unregistered`));
-  console.log(chalk.dim('Note: This only removes the registration. Project files are unchanged.'));
 }
 
 async function runShow(name: string, globals: GlobalOptions): Promise<void> {

@@ -867,6 +867,27 @@ export class SQLiteStore implements GraphStore {
     }));
   }
 
+  async getProjectByName(name: string): Promise<Project | null> {
+    const row = this.db.prepare(
+      `SELECT p.*,
+        (SELECT COUNT(*) FROM files WHERE project_id = p.id) AS live_file_count,
+        (SELECT COUNT(*) FROM entities WHERE project_id = p.id AND deleted_at IS NULL AND status != 'deleted') AS live_entity_count
+      FROM projects p WHERE p.name = ?`,
+    ).get(name) as (ProjectRow & { live_file_count: number; live_entity_count: number }) | undefined;
+
+    if (!row) return null;
+    return {
+      ...rowToProject(row),
+      fileCount: row.live_file_count,
+      entityCount: row.live_entity_count,
+    };
+  }
+
+  async deleteProject(id: string): Promise<boolean> {
+    const result = this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    return result.changes > 0;
+  }
+
   // --- Contradictions ---
 
   async createContradiction(
