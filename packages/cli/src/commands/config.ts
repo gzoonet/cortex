@@ -3,7 +3,7 @@ import { resolve, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import chalk from 'chalk';
-import { loadConfig, getDefaultConfig, cortexConfigSchema, createLogger } from '@cortex/core';
+import { loadConfig, getDefaultConfig, cortexConfigSchema, createLogger, findConfigFile } from '@cortex/core';
 import type { GlobalOptions } from '../index.js';
 
 const logger = createLogger('cli:config');
@@ -135,15 +135,12 @@ function getConfigFilePath(globals: GlobalOptions): string {
   if (globals.config) {
     return resolve(globals.config, 'cortex.config.json');
   }
-  // Search the same locations loadConfig uses: CWD first, then global ~/.cortex/
-  const cwdPath = resolve(process.cwd(), 'cortex.config.json');
-  try {
-    readFileSync(cwdPath);
-    return cwdPath;
-  } catch {
-    // Fall back to global config
-    return resolve(homedir(), '.cortex', 'cortex.config.json');
-  }
+  // Use the same findConfigFile() that loadConfig uses so add/remove
+  // and list always resolve to the same file.
+  const found = findConfigFile();
+  if (found) return found;
+  // No existing config — fall back to global location (will be created on write)
+  return resolve(homedir(), '.cortex', 'cortex.config.json');
 }
 
 function readConfigFile(path: string): Record<string, unknown> {
