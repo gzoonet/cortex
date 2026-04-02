@@ -40,7 +40,10 @@ export function wireTokenPersistence(router: Router, store: SQLiteStore): void {
   });
 }
 
+declare const CORTEX_VERSION: string | undefined;
+
 export function getVersion(): string {
+  if (typeof CORTEX_VERSION !== 'undefined') return CORTEX_VERSION;
   let dir = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
     try {

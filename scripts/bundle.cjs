@@ -22,8 +22,10 @@ try {
   console.warn('Warning: web dashboard build failed (missing native deps?) — skipping, CLI bundle continues');
 }
 
+const version = pkg.version || '0.0.0';
+
 execSync(
-  `npx esbuild packages/cli/dist/index.js --bundle --platform=node --target=node20 --format=esm --outfile=dist/cortex.mjs ${externals}`,
+  `npx esbuild packages/cli/dist/index.js --bundle --platform=node --target=node20 --format=esm --outfile=dist/cortex.mjs --define:CORTEX_VERSION='"${version}"' ${externals}`,
   { cwd: root, stdio: 'inherit' }
 );
 
