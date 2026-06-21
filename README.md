@@ -24,7 +24,7 @@ and gives it back to you when you need it.
 
 ## What It Does
 
-- **Watches** your project files (md, ts, js, json, yaml) for changes
+- **Watches** your project files (md, ts, js, py, json, yaml) for changes
 - **Extracts** entities: decisions, patterns, components, dependencies, constraints, action items
 - **Infers** relationships between entities across projects
 - **Detects** contradictions when decisions conflict
@@ -42,6 +42,16 @@ and gives it back to you when you need it.
 npm install -g @gzoo/cortex
 ```
 
+If global install fails with `EACCES`, use a user prefix instead:
+
+```bash
+mkdir -p ~/.local
+npm config set prefix ~/.local
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+npm install -g @gzoo/cortex
+```
+
 Or install from source:
 
 ```bash
@@ -50,12 +60,15 @@ cd cortex
 npm install && npm run build && npm link
 ```
 
+Verify: `cortex --version` (current release: **0.7.0**)
+
 ### 2. Setup
 
 Run the interactive wizard:
 
 ```bash
 cortex init
+cortex doctor                              # verify config, providers, and DB
 ```
 
 This walks you through:
@@ -65,7 +78,7 @@ This walks you through:
 - **Watch directories** — which directories Cortex should monitor
 - **Budget limit** — monthly LLM spend cap
 
-Config is stored at `~/.cortex/cortex.config.json`. API keys go in `~/.cortex/.env`.
+`cortex init` writes global config to `~/.cortex/cortex.config.json`. API keys go in `~/.cortex/.env`.
 
 ### 3. Register Projects
 
@@ -75,10 +88,25 @@ cortex projects add api ~/projects/api
 cortex projects list                       # verify
 ```
 
-### 4. Watch & Query
+### 4. Ingest, Watch & Query
+
+**Backfill existing files first** — the watcher only picks up new changes:
 
 ```bash
-cortex watch                               # start watching for changes
+cortex ingest "~/projects/app/src/**/*.ts"   # one-shot backfill
+cortex serve                                 # dashboard + API + file watcher (recommended)
+```
+
+| Command | What it does |
+|---------|-------------|
+| `cortex serve` | Web dashboard + API + file watcher (`ignoreInitial` — no re-ingest on start) |
+| `cortex watch` | CLI-only file watcher (no dashboard) |
+| `cortex ingest` | One-shot ingestion; events do **not** appear in the Live Feed |
+
+> **Don't run `watch` and `serve` together** — they compete for file changes.
+> The Live Feed shows real-time events from `cortex serve` only (file saves while the server is running).
+
+```bash
 cortex query "what caching strategies am I using?"
 cortex query "what decisions have I made about authentication?"
 cortex find "PostgreSQL" --expand 2
@@ -90,6 +118,14 @@ cortex contradictions
 ```bash
 cortex serve                               # open http://localhost:3710
 ```
+
+Remote access:
+
+```bash
+cortex serve --host 0.0.0.0
+```
+
+Auth is enforced automatically on non-localhost hosts. The dashboard injects a bearer token into the HTML so API and WebSocket calls work behind a reverse proxy.
 
 ### Excluding Files & Directories
 
@@ -127,27 +163,37 @@ Cortex is **provider-agnostic**. It supports:
 - **Any OpenAI-compatible API** — OpenRouter, local proxies, etc.
 - **Ollama** (Mistral, Llama, etc.) — fully local, no cloud required
 
+Cost tracking uses provider-aware rates for DeepSeek, Gemini, Groq, and OpenRouter models — not a blanket Anthropic fallback.
+
 ### Routing Modes
 
-| Mode | Cloud Cost | Quality | GPU Required |
-|------|-----------|---------|--------------|
+| Mode | Cloud Cost | Quality | Ollama Required |
+|------|-----------|---------|-----------------|
 | `cloud-first` | Varies by provider | Highest | No |
-| `hybrid` | Reduced | High | Yes (Ollama) |
-| `local-first` | Minimal | Good | Yes (Ollama) |
-| `local-only` | $0 | Good | Yes (Ollama) |
+| `hybrid` | Reduced | High | Yes |
+| `local-first` | Minimal | Good | Yes |
+| `local-only` | $0 | Good | Yes |
 
-Hybrid mode routes high-volume tasks (entity extraction, ranking) to Ollama
-and reasoning-heavy tasks (relationship inference, queries) to your cloud provider.
+In **cloud-first** mode, all tasks route to your cloud provider. Ollama is not required and is only used if budget fallback is enabled. Hybrid mode routes high-volume tasks (entity extraction, ranking) to Ollama and reasoning-heavy tasks (relationship inference, queries) to your cloud provider.
 
 ## Requirements
 
 - **Node.js** 20+
 - **LLM API key** for cloud modes — Anthropic, Google Gemini, DeepSeek, Groq, or any OpenAI-compatible provider
-- **Ollama** (for hybrid/local modes) — [install](https://ollama.ai/)
+- **Ollama** — only for `hybrid`, `local-first`, or `local-only` modes ([install](https://ollama.ai/))
 
 ## Configuration
 
-All config lives in `~/.cortex/cortex.config.json`. API keys are in `~/.cortex/.env`.
+Config is layered — later sources override earlier ones:
+
+| Priority | Location | Scope |
+|----------|----------|-------|
+| 1 | Built-in defaults | Global |
+| 2 | `~/.cortex/cortex.config.json` | Global (created by `cortex init`) |
+| 3 | `./cortex.config.json` | Project overrides (optional) |
+| 4 | `CORTEX_*` env vars | Session |
+
+API keys are stored separately in `~/.cortex/.env` (never in config JSON).
 
 ```bash
 cortex config list                       # see all non-default settings
@@ -155,6 +201,7 @@ cortex config set llm.mode hybrid        # switch routing mode
 cortex config set llm.budget.monthlyLimitUsd 10  # set budget
 cortex config exclude add vendor         # exclude a directory from watching
 cortex privacy set ~/clients restricted  # mark directory as restricted
+cortex doctor                            # validate setup
 ```
 
 Full configuration reference: [docs/configuration.md](docs/configuration.md)
@@ -164,26 +211,24 @@ Full configuration reference: [docs/configuration.md](docs/configuration.md)
 | Command | Description |
 |---------|-------------|
 | `cortex init` | Interactive setup wizard |
-| `cortex projects add <name> [path]` | Register a project directory |
-| `cortex projects list` | List registered projects |
-| `cortex projects remove <name>` | Unregister a project |
-| `cortex projects show <name>` | Show project details |
-| `cortex watch [project]` | Start watching for file changes |
-| `cortex stop` | Stop a running watch process |
+| `cortex doctor` | Validate config, providers, projects, secrets, and database |
+| `cortex projects add/list/remove/show` | Manage registered projects |
+| `cortex serve` | Web dashboard + API + file watcher (port 3710) |
+| `cortex watch [project]` | CLI-only file watcher |
+| `cortex ingest <file-or-glob>` | One-shot file ingestion (separate from Live Feed) |
 | `cortex query <question>` | Natural language query with citations |
 | `cortex find <term>` | Find entities by name |
-| `cortex ingest <file-or-glob>` | One-shot file ingestion |
 | `cortex status` | Graph stats, costs, provider status |
 | `cortex costs` | Detailed cost breakdown |
 | `cortex contradictions` | List active contradictions |
 | `cortex resolve <id>` | Resolve a contradiction |
 | `cortex models list/pull/test/info` | Manage Ollama models |
-| `cortex serve` | Start web dashboard (localhost:3710) |
 | `cortex mcp` | Start MCP server for Claude Code |
 | `cortex report` | Post-ingestion summary |
-| `cortex privacy set <dir> <level>` | Set directory privacy |
-| `cortex config list/get/set` | Read/write configuration |
+| `cortex privacy set/list` | Set directory privacy |
+| `cortex config list/get/set/validate` | Read/write configuration |
 | `cortex config exclude add/remove/list` | Manage file/directory exclusions |
+| `cortex stop` / `cortex restart` | Manage running watch/serve processes |
 | `cortex db` | Database operations |
 
 Full CLI reference: [docs/cli-reference.md](docs/cli-reference.md)
@@ -194,9 +239,44 @@ Run `cortex serve` to open a full web dashboard at `http://localhost:3710` with:
 
 - **Dashboard Home** — graph stats, recent activity, entity type breakdown
 - **Knowledge Graph** — interactive D3-force graph with clustering, click to explore
-- **Live Feed** — real-time file change and entity extraction events via WebSocket
+- **Live Feed** — real-time file change and entity extraction events via WebSocket (from `cortex serve` only)
 - **Query Explorer** — natural language queries with streaming responses
 - **Contradiction Resolver** — review and resolve conflicting decisions
+
+### Remote Deployment
+
+For access beyond localhost, bind to all interfaces and put Cortex behind a reverse proxy:
+
+```bash
+cortex serve --host 0.0.0.0
+```
+
+Example nginx config — protect `/api/` and `/ws` with basic auth; serve static assets without auth (the dashboard injects the bearer token into HTML):
+
+```nginx
+location /api/ {
+    auth_basic "Cortex";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+    proxy_pass http://127.0.0.1:3710;
+    proxy_set_header Authorization "Bearer $CORTEX_TOKEN";
+}
+
+location /ws {
+    auth_basic "Cortex";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+    proxy_pass http://127.0.0.1:3710;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+
+location / {
+    auth_basic off;
+    proxy_pass http://127.0.0.1:3710;
+}
+```
+
+Set `CORTEX_SERVER_AUTH_TOKEN` or `server.auth.token` in config. When auth is enabled, Cortex injects the token into the dashboard HTML so API and WebSocket calls authenticate automatically.
 
 ## MCP Server (Claude Code Integration)
 
@@ -206,7 +286,7 @@ Cortex includes an MCP server so Claude Code can query your knowledge graph dire
 claude mcp add cortex --scope user -- npx @gzoo/cortex mcp
 ```
 
-This gives Claude Code 12 tools:
+This gives Claude Code **12 tools**:
 
 | Tool | Description |
 |------|-------------|
@@ -231,7 +311,7 @@ Monorepo with eight packages:
 - **@cortex/ingest** — file parsers (tree-sitter + remark), chunker, watcher, pipeline
 - **@cortex/graph** — SQLite store, LanceDB vectors, query engine
 - **@cortex/llm** — Anthropic/Gemini/OpenAI-compatible/Ollama providers, router, prompts, cache
-- **@cortex/cli** — Commander.js CLI with 18 commands
+- **@cortex/cli** — Commander.js CLI
 - **@cortex/mcp** — Model Context Protocol server (stdio transport, 12 tools)
 - **@cortex/server** — Express REST API + WebSocket relay
 - **@cortex/web** — React + Vite + D3 web dashboard

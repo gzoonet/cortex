@@ -1,5 +1,27 @@
 const API_BASE = '/api/v1';
 
+function getAuthToken(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+
+  const win = window as typeof window & { __CORTEX_TOKEN__?: string };
+  if (win.__CORTEX_TOKEN__) return win.__CORTEX_TOKEN__;
+
+  const meta = document.querySelector('meta[name="cortex-auth-token"]');
+  return meta?.getAttribute('content') ?? undefined;
+}
+
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...extra,
+  };
+  const token = getAuthToken();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 export interface ApiResponse<T> {
   success: boolean;
   data: T;
@@ -12,8 +34,9 @@ export async function apiFetch<T>(
   options?: RequestInit,
 ): Promise<ApiResponse<T>> {
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    credentials: 'include',
+    headers: authHeaders(options?.headers as Record<string, string> | undefined),
   });
   const json = (await res.json()) as ApiResponse<T>;
   if (!json.success) {
@@ -55,7 +78,8 @@ export const api = {
   ): AsyncGenerator<{ type: 'chunk'; content: string } | { type: 'sources'; entities: QueryResult['sources'] } | { type: 'complete' }> {
     const res = await fetch(`${API_BASE}/query`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      headers: authHeaders(),
       body: JSON.stringify({ query, projectId, stream: true }),
     });
 

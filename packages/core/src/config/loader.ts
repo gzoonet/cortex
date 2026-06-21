@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { cortexConfigSchema, type CortexConfigInput } from './schema.js';
 import type { CortexConfig } from '../types/config.js';
 import { CortexError, CONFIG_INVALID, CONFIG_MISSING } from '../errors/cortex-error.js';
+import { deepMerge } from './deep-merge.js';
 
 /**
  * Load ~/.cortex/.env file into process.env (does not override existing vars).
@@ -43,21 +44,37 @@ function loadDotEnv(): void {
 
 const CONFIG_FILENAME = 'cortex.config.json';
 
-export function findConfigFile(startDir?: string): string | null {
-  const searchPaths = [
-    startDir ? resolve(startDir, CONFIG_FILENAME) : null,
-    resolve(process.cwd(), CONFIG_FILENAME),
-    join(homedir(), '.cortex', CONFIG_FILENAME),
-  ].filter((p): p is string => p !== null);
+function getGlobalConfigPath(): string {
+  return join(homedir(), '.cortex', CONFIG_FILENAME);
+}
 
+function getProjectConfigCandidates(startDir?: string): string[] {
   const envPath = process.env['CORTEX_CONFIG_PATH'];
   if (envPath) {
-    searchPaths.unshift(resolve(envPath));
+    return [resolve(envPath)];
   }
 
-  for (const p of searchPaths) {
-    if (existsSync(p)) return p;
+  return [
+    startDir ? resolve(startDir, CONFIG_FILENAME) : null,
+    resolve(process.cwd(), CONFIG_FILENAME),
+  ].filter((p): p is string => p !== null);
+}
+
+function findProjectConfigFile(startDir?: string): string | null {
+  for (const candidate of getProjectConfigCandidates(startDir)) {
+    if (existsSync(candidate)) return candidate;
   }
+  return null;
+}
+
+/** Return the most specific config file path (project overrides global for display). */
+export function findConfigFile(startDir?: string): string | null {
+  const projectPath = findProjectConfigFile(startDir);
+  if (projectPath) return projectPath;
+
+  const globalPath = getGlobalConfigPath();
+  if (existsSync(globalPath)) return globalPath;
+
   return null;
 }
 
@@ -74,6 +91,22 @@ function readConfigFile(filePath: string): Record<string, unknown> {
       { filePath },
     );
   }
+}
+
+function loadLayeredFileConfig(configDir?: string): Record<string, unknown> {
+  let merged: Record<string, unknown> = {};
+
+  const globalPath = getGlobalConfigPath();
+  if (existsSync(globalPath)) {
+    merged = deepMerge(merged, readConfigFile(globalPath));
+  }
+
+  const projectPath = findProjectConfigFile(configDir);
+  if (projectPath && projectPath !== globalPath) {
+    merged = deepMerge(merged, readConfigFile(projectPath));
+  }
+
+  return merged;
 }
 
 function applyEnvOverrides(config: CortexConfigInput): CortexConfigInput {
@@ -123,34 +156,45 @@ export function loadConfig(options: LoadConfigOptions = {}): CortexConfig {
 
   let fileConfig: Record<string, unknown> = {};
 
-  // When requireFile + configDir, only check that specific directory
-  let configPath: string | null;
   if (requireFile && configDir) {
     const candidate = resolve(configDir, CONFIG_FILENAME);
-    configPath = existsSync(candidate) ? candidate : null;
+    if (existsSync(candidate)) {
+      fileConfig = readConfigFile(candidate);
+    } else if (!existsSync(getGlobalConfigPath())) {
+      throw new CortexError(
+        CONFIG_MISSING,
+        'critical',
+        'config',
+        `No cortex.config.json found in ${configDir} or ~/.cortex/. Run \`cortex init\` to create one.`,
+        undefined,
+        'Run `cortex init` to create a configuration file.',
+      );
+    } else {
+      fileConfig = loadLayeredFileConfig(configDir);
+    }
   } else {
-    configPath = findConfigFile(configDir);
+    fileConfig = loadLayeredFileConfig(configDir);
+    if (requireFile && Object.keys(fileConfig).length === 0) {
+      throw new CortexError(
+        CONFIG_MISSING,
+        'critical',
+        'config',
+        'No cortex.config.json found. Run `cortex init` to create one.',
+        undefined,
+        'Run `cortex init` to create a configuration file.',
+      );
+    }
   }
 
-  if (configPath) {
-    fileConfig = readConfigFile(configPath);
-  } else if (requireFile) {
-    throw new CortexError(
-      CONFIG_MISSING,
-      'critical',
-      'config',
-      'No cortex.config.json found. Run `cortex init` to create one.',
-      undefined,
-      'Run `cortex init` to create a configuration file.',
-    );
-  }
-
-  // Layer: file config → env overrides → explicit overrides
+  // Layer: global + project merge → env overrides → explicit overrides
   let merged: CortexConfigInput = { ...fileConfig } as CortexConfigInput;
   merged = applyEnvOverrides(merged);
 
   if (overrides) {
-    merged = { ...merged, ...overrides };
+    merged = deepMerge(
+      merged as Record<string, unknown>,
+      overrides as Record<string, unknown>,
+    ) as CortexConfigInput;
   }
 
   // Validate with Zod (fills in defaults)
@@ -175,3 +219,5 @@ export function loadConfig(options: LoadConfigOptions = {}): CortexConfig {
 export function getDefaultConfig(): CortexConfig {
   return cortexConfigSchema.parse({}) as CortexConfig;
 }
+
+export { deepMerge } from './deep-merge.js';

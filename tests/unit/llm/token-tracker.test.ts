@@ -22,6 +22,34 @@ describe('estimateCost', () => {
     // Default: $3/M input, $15/M output (same as Sonnet)
     expect(cost).toBeCloseTo(0.0105, 4);
   });
+
+  it('should calculate cost for DeepSeek models', () => {
+    const cost = estimateCost('deepseek-chat', 1_000_000, 1_000_000);
+    // $0.14/M input + $0.28/M output
+    expect(cost).toBeCloseTo(0.42, 4);
+  });
+
+  it('should use openai-compatible default for unknown models on that provider', () => {
+    const cost = estimateCost('some-local-model', 1_000_000, 1_000_000, 'openai-compatible');
+    expect(cost).toBeCloseTo(0.42, 4);
+  });
+
+  it('should calculate cost for Gemini models', () => {
+    const cost = estimateCost('gemini-2.5-flash', 1_000_000, 1_000_000);
+    // $0.15/M input + $0.60/M output
+    expect(cost).toBeCloseTo(0.75, 4);
+  });
+
+  it('should calculate cost for Groq models', () => {
+    const cost = estimateCost('llama-3.3-70b-versatile', 1_000_000, 1_000_000);
+    // $0.59/M input + $0.79/M output
+    expect(cost).toBeCloseTo(1.38, 4);
+  });
+
+  it('should calculate cost for OpenRouter Gemini aliases', () => {
+    const cost = estimateCost('google/gemini-2.0-flash-001', 1_000_000, 1_000_000);
+    expect(cost).toBeCloseTo(0.50, 4);
+  });
 });
 
 describe('TokenTracker', () => {

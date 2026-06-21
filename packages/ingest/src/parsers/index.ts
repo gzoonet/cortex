@@ -1,6 +1,7 @@
 import type { Parser } from './types.js';
 import { MarkdownParser } from './markdown.js';
 import { TypeScriptParser } from './typescript.js';
+import { PythonParser } from './python.js';
 import { JsonParser } from './json-parser.js';
 import { YamlParser } from './yaml-parser.js';
 import { ConversationParser, isConversationJson, isConversationMarkdown } from './conversation.js';
@@ -9,6 +10,7 @@ export type { Parser, ParseResult, ParsedSection } from './types.js';
 
 const markdownParser = new MarkdownParser();
 const typescriptParser = new TypeScriptParser();
+const pythonParser = new PythonParser();
 const jsonParser = new JsonParser();
 const yamlParser = new YamlParser();
 const conversationParser = new ConversationParser();
@@ -20,6 +22,7 @@ const PARSER_REGISTRY: Map<string, Parser> = new Map([
   ['tsx', typescriptParser],
   ['js', typescriptParser],
   ['jsx', typescriptParser],
+  ['py', pythonParser],
   ['json', jsonParser],
   ['yaml', yamlParser],
   ['yml', yamlParser],

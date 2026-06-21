@@ -48,7 +48,7 @@ export { EventBus, eventBus } from './events/event-bus.js';
 
 // Config
 export { cortexConfigSchema, type CortexConfigInput } from './config/schema.js';
-export { loadConfig, getDefaultConfig, findConfigFile, type LoadConfigOptions } from './config/loader.js';
+export { loadConfig, getDefaultConfig, findConfigFile, deepMerge, type LoadConfigOptions } from './config/loader.js';
 
 // Project Registry
 export {

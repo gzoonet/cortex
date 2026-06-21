@@ -48,7 +48,7 @@ export function Graph() {
   useEffect(() => {
     api.getStatus()
       .then(() =>
-        fetch('/api/v1/graph?limit=2000')
+        fetch('/api/v1/graph?limit=2000', { credentials: 'include' })
           .then((r) => r.json() as Promise<{ success: boolean; data: GraphData }>)
           .then((r) => {
             if (r.success) setRawData(r.data);

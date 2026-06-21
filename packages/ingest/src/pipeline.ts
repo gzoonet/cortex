@@ -21,6 +21,7 @@ import {
 import type { SQLiteStore } from '@cortex/graph';
 import { getParser } from './parsers/index.js';
 import { chunkSections, type Chunk } from './chunker.js';
+import { compileSecretPatterns } from './secret-patterns.js';
 import { runMergeDetection, runContradictionDetection } from './post-ingest.js';
 
 const logger = createLogger('ingest:pipeline');
@@ -62,16 +63,7 @@ export class IngestionPipeline {
     this.router = router;
     this.store = store;
     this.options = options;
-    this.compiledSecretPatterns = (options.secretPatterns ?? [])
-      .map((pattern) => {
-        try {
-          return new RegExp(pattern, 'g');
-        } catch {
-          logger.warn('Invalid secret pattern, skipping', { pattern });
-          return null;
-        }
-      })
-      .filter((r): r is RegExp => r !== null);
+    this.compiledSecretPatterns = compileSecretPatterns(options.secretPatterns ?? []);
   }
 
   /**

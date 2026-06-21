@@ -130,6 +130,18 @@ async function runInit(
   }
   config.llm.mode = mode;
 
+  // Cloud-first without Ollama: route all tasks to cloud (no local provider initialized)
+  if (mode === 'cloud-first') {
+    config.llm.taskRouting = {
+      entity_extraction: 'auto',
+      relationship_inference: 'auto',
+      contradiction_detection: 'auto',
+      conversational_query: 'auto',
+      context_ranking: 'auto',
+      embedding_generation: 'auto',
+    };
+  }
+
   const usesLocal = hasOllama;
   const usesCloud = hasApiKey;
 
@@ -182,7 +194,7 @@ async function runInit(
         config.llm.taskRouting = {
           entity_extraction:      extractionRoute,
           relationship_inference: extractionRoute,
-          contradiction_detection: 'local',
+          contradiction_detection: extractionRoute,
           conversational_query:   'cloud',
           context_ranking:        'local',
           embedding_generation:   'local',
@@ -308,10 +320,10 @@ function writeConfig(config: Record<string, unknown> | ReturnType<typeof getDefa
   if (!existsSync(cortexDir)) {
     mkdirSync(cortexDir, { recursive: true });
   }
-  // Write config to --config dir if specified, otherwise cwd (per-project config)
+  // Write config to --config dir if specified, otherwise ~/.cortex/cortex.config.json
   const configPath = globals.config
     ? resolve(globals.config, 'cortex.config.json')
-    : resolve(process.cwd(), 'cortex.config.json');
+    : join(homedir(), '.cortex', 'cortex.config.json');
   writeFileSync(configPath, JSON.stringify(validated, null, 2), { mode: 0o600 });
 
   if (!globals.quiet) {

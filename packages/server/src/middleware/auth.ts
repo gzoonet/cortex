@@ -94,11 +94,20 @@ export function createAuthMiddleware(
   };
 }
 
-// NOTE: WebSocket auth uses query string token (?token=...) because the WebSocket
-// protocol does not support custom headers during the upgrade handshake. This means
-// the token may appear in server access logs and proxy logs. For production use on
-// non-localhost, consider additional network-level protections (TLS, firewall rules).
-export function validateWsToken(config: CortexConfig, host: string, url: string | undefined): boolean {
+function extractBearerToken(authHeader: string | string[] | undefined): string | null {
+  const raw = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+  if (!raw?.startsWith('Bearer ')) return null;
+  return raw.slice(7);
+}
+
+// WebSocket auth: browsers cannot set custom headers on upgrade, so clients may use
+// ?token=.... Reverse proxies (nginx) can inject Authorization: Bearer instead.
+export function validateWsToken(
+  config: CortexConfig,
+  host: string,
+  url: string | undefined,
+  authHeader?: string | string[],
+): boolean {
   const authEnabled = config.server.auth.enabled;
   const token = config.server.auth.token;
   const isLocal = isLocalhost(host);
@@ -106,6 +115,9 @@ export function validateWsToken(config: CortexConfig, host: string, url: string 
 
   if (!authRequired) return true;
   if (!token) return false;
+
+  const headerToken = extractBearerToken(authHeader);
+  if (headerToken && safeEqual(headerToken, token)) return true;
 
   try {
     const params = new URL(url ?? '', 'http://localhost').searchParams;

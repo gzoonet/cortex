@@ -8,7 +8,7 @@ export const ingestConfigSchema = z.object({
     'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
     '__pycache__', '*.pyc', '.DS_Store', 'Thumbs.db',
   ]),
-  fileTypes: z.array(z.string()).default(['md', 'ts', 'tsx', 'js', 'jsx', 'json', 'yaml', 'yml']),
+  fileTypes: z.array(z.string()).default(['md', 'ts', 'tsx', 'js', 'jsx', 'py', 'json', 'yaml', 'yml']),
   maxFileSize: z.number().positive().default(10_485_760),
   maxFilesPerDir: z.number().positive().default(10_000),
   maxTotalFiles: z.number().positive().default(50_000),
@@ -70,10 +70,10 @@ export const llmConfigSchema = z.object({
   taskRouting: z.record(z.string(), z.enum(['auto', 'local', 'cloud'])).default({
     entity_extraction: 'auto',
     relationship_inference: 'auto',
-    contradiction_detection: 'local',
+    contradiction_detection: 'auto',
     conversational_query: 'auto',
     context_ranking: 'auto',
-    embedding_generation: 'local',
+    embedding_generation: 'auto',
   }),
   temperature: z.record(z.string(), z.number().min(0).max(2)).default({
     extraction: 0.1,
@@ -95,11 +95,11 @@ export const privacyConfigSchema = z.object({
   logTransmissions: z.boolean().default(true),
   showTransmissionIndicator: z.boolean().default(true),
   secretPatterns: z.array(z.string()).default([
-    '(?i)(api[_-]?key|secret[_-]?key|access[_-]?token)\\s*[:=]\\s*[\\w\\-]{20,}',
+    '(api[_-]?key|secret[_-]?key|access[_-]?token)\\s*[:=]\\s*[\\w\\-]{20,}',
     'AKIA[0-9A-Z]{16}',
     'sk-ant-[a-zA-Z0-9\\-]{40,}',
     'ghp_[a-zA-Z0-9]{36}',
-    '(?i)password\\s*[:=]\\s*\\S{8,}',
+    'password\\s*[:=]\\s*\\S{8,}',
   ]),
 });
 

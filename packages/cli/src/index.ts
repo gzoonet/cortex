@@ -2,6 +2,7 @@
 
 import { Command } from 'commander';
 import { registerInitCommand } from './commands/init.js';
+import { registerDoctorCommand } from './commands/doctor.js';
 import { registerWatchCommand } from './commands/watch.js';
 import { registerQueryCommand } from './commands/query.js';
 import { registerFindCommand } from './commands/find.js';
@@ -76,6 +77,7 @@ export interface GlobalOptions {
 }
 
 registerInitCommand(program);
+registerDoctorCommand(program);
 registerWatchCommand(program);
 registerQueryCommand(program);
 registerFindCommand(program);

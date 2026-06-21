@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import express from 'express';
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
@@ -56,6 +57,23 @@ export async function startServer(options: ServerOptions): Promise<void> {
   const bundle = createBundle(config);
   const app = express();
   const server = createServer(app);
+
+  // First-run hint: projects registered but graph is empty
+  try {
+    const stats = await bundle.store.getStats();
+    const projects = await bundle.store.listProjects();
+    if (projects.length > 0 && stats.entityCount === 0 && stats.fileCount === 0) {
+      logger.info(
+        'Knowledge graph is empty but projects are registered. ' +
+        'Run `cortex ingest <project>` to backfill existing files.',
+      );
+      console.log(
+        '\n  Tip: Graph is empty. Run `cortex ingest` to backfill registered projects.\n',
+      );
+    }
+  } catch {
+    // Non-fatal — continue starting server
+  }
 
   // Trust reverse proxy (nginx) — required for correct IP detection and rate limiting
   app.set('trust proxy', 1);
@@ -142,11 +160,31 @@ export async function startServer(options: ServerOptions): Promise<void> {
   // Serve static web dashboard if available
   if (options.webDistPath) {
     const webDist = resolve(options.webDistPath);
-    app.use(express.static(webDist));
+    app.use(express.static(webDist, { index: false }));
+
+    const injectAuthToken = (html: string): string => {
+      const token = config.server.auth.token;
+      if (!config.server.auth.enabled || !token) return html;
+
+      const tokenMeta = `<meta name="cortex-auth-token" content="${token}" />`;
+      const tokenScript = `<script>window.__CORTEX_TOKEN__=${JSON.stringify(token)};</script>`;
+
+      if (html.includes('</head>')) {
+        return html.replace('</head>', `    ${tokenMeta}\n    ${tokenScript}\n  </head>`);
+      }
+      return `${tokenMeta}\n${tokenScript}\n${html}`;
+    };
+
     // SPA fallback: serve index.html for all non-API routes
     const spaLimiter = rateLimit({ windowMs: 60_000, max: 60 });
     app.get('*', spaLimiter, (_req, res) => {
-      res.sendFile(resolve(webDist, 'index.html'));
+      const indexPath = resolve(webDist, 'index.html');
+      if (config.server.auth.enabled && config.server.auth.token) {
+        const html = injectAuthToken(readFileSync(indexPath, 'utf-8'));
+        res.type('html').send(html);
+      } else {
+        res.sendFile(indexPath);
+      }
     });
     logger.info('Serving web dashboard', { path: webDist });
   }

@@ -1,22 +1,23 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { loadConfig, getDefaultConfig, cortexConfigSchema } from '@cortex/core';
 
 describe('Config Loader', () => {
   let tempDir: string;
   let savedConfigPath: string | undefined;
+  let savedHome: string | undefined;
   let cwdSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     tempDir = join(tmpdir(), `cortex-test-${Date.now()}`);
     mkdirSync(tempDir, { recursive: true });
     // Isolate tests from any real config:
-    // 1. Remove CORTEX_CONFIG_PATH env var so it doesn't override configDir
     savedConfigPath = process.env['CORTEX_CONFIG_PATH'];
     delete process.env['CORTEX_CONFIG_PATH'];
-    // 2. Mock cwd() to prevent findConfigFile from falling back to the repo root
+    savedHome = process.env['HOME'];
+    process.env['HOME'] = tempDir;
     cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(tempDir);
   });
 
@@ -25,6 +26,13 @@ describe('Config Loader', () => {
     cwdSpy.mockRestore();
     if (savedConfigPath !== undefined) {
       process.env['CORTEX_CONFIG_PATH'] = savedConfigPath;
+    } else {
+      delete process.env['CORTEX_CONFIG_PATH'];
+    }
+    if (savedHome !== undefined) {
+      process.env['HOME'] = savedHome;
+    } else {
+      delete process.env['HOME'];
     }
   });
 
@@ -48,6 +56,25 @@ describe('Config Loader', () => {
     expect(config.llm.budget.monthlyLimitUsd).toBe(50);
     // Other defaults should still apply
     expect(config.privacy.defaultLevel).toBe('standard');
+  });
+
+  it('should deep-merge global and project config (project overrides global)', () => {
+    const globalDir = join(tempDir, '.cortex');
+    mkdirSync(globalDir, { recursive: true });
+    writeFileSync(join(globalDir, 'cortex.config.json'), JSON.stringify({
+      llm: { mode: 'cloud-first', budget: { monthlyLimitUsd: 25 } },
+      server: { port: 3710 },
+    }));
+
+    writeFileSync(join(tempDir, 'cortex.config.json'), JSON.stringify({
+      llm: { mode: 'hybrid' },
+      server: { port: 4000 },
+    }));
+
+    const config = loadConfig({ configDir: tempDir });
+    expect(config.llm.mode).toBe('hybrid');
+    expect(config.llm.budget.monthlyLimitUsd).toBe(25);
+    expect(config.server.port).toBe(4000);
   });
 
   it('should throw on invalid config with requireFile', () => {
@@ -80,6 +107,9 @@ describe('Config Schema', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.llm.mode).toBe('cloud-first');
+      expect(result.data.llm.taskRouting.contradiction_detection).toBe('auto');
+      expect(result.data.llm.taskRouting.embedding_generation).toBe('auto');
+      expect(result.data.ingest.fileTypes).toContain('py');
     }
   });
 

@@ -28,6 +28,24 @@ interface WebSocketState {
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+function getAuthToken(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+
+  const win = window as typeof window & { __CORTEX_TOKEN__?: string };
+  if (win.__CORTEX_TOKEN__) return win.__CORTEX_TOKEN__;
+
+  const meta = document.querySelector('meta[name="cortex-auth-token"]');
+  return meta?.getAttribute('content') ?? undefined;
+}
+
+function buildWsUrl(): string {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const base = `${protocol}//${window.location.host}/ws`;
+  const token = getAuthToken();
+  if (!token) return base;
+  return `${base}?token=${encodeURIComponent(token)}`;
+}
+
 const COUNTER_CHANNELS: Record<string, keyof WebSocketState['counters']> = {
   'entity.created': 'entities',
   'relationship.created': 'relationships',
@@ -44,8 +62,7 @@ export const useWebSocketStore = create<WebSocketState>((set, get) => ({
   connect: () => {
     if (ws && ws.readyState <= WebSocket.OPEN) return;
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${protocol}//${window.location.host}/ws`;
+    const url = buildWsUrl();
 
     ws = new WebSocket(url);
 

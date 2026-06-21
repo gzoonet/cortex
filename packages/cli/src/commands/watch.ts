@@ -1,6 +1,5 @@
 import { Command } from 'commander';
-import { resolve, join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import chalk from 'chalk';
 import ora from 'ora';
 import { loadConfig, findConfigFile, createLogger, setGlobalLogLevel, eventBus, getProject, updateProjectLastWatched } from '@cortex/core';
@@ -43,14 +42,6 @@ async function runWatch(
 
     projectRoot = registeredProject.path;
     
-    // Check config exists
-    const configPath = join(projectRoot, 'cortex.config.json');
-    if (!existsSync(configPath)) {
-      console.error(chalk.red(`Error: No cortex.config.json found in ${projectRoot}`));
-      console.log(chalk.dim(`Run 'cd ${projectRoot} && cortex init' to create one.`));
-      process.exit(1);
-    }
-
     // Update last watched timestamp
     updateProjectLastWatched(projectName);
   }

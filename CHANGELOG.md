@@ -2,6 +2,23 @@
 
 All notable changes to GZOO Cortex will be documented in this file.
 
+## [0.7.0] - 2026-06-21
+
+### Added
+
+- **`cortex doctor`** — health checks for config schema, API keys, provider reachability, registered projects, and database
+- **Python parser** — tree-sitter support for `.py` files
+- **Layered config** — global `~/.cortex/cortex.config.json` merged with optional project `./cortex.config.json`
+- **Remote dashboard auth** — bearer token injected into HTML for API/WebSocket calls behind reverse proxies
+
+### Changed
+
+- **`cortex init`** — writes global config to `~/.cortex/cortex.config.json` by default
+- **Cloud-first routing** — no silent Ollama dependency; cloud provider required unless budget fallback is enabled
+- **Cost estimation** — provider-aware rates for DeepSeek, Gemini, Groq, and OpenRouter (not Anthropic fallback)
+- **`cortex serve`** — file watcher uses `ignoreInitial`; run `cortex ingest` to backfill existing files
+- **MCP server** — expanded from 4 to 12 tools
+
 ## [0.1.0] - 2026-03-04
 
 ### Added

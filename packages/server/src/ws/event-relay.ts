@@ -28,7 +28,7 @@ export function createEventRelay(server: Server, config?: CortexConfig, host?: s
   const unsubscribers: Array<() => void> = [];
 
   wss.on('connection', (ws, req) => {
-    if (config && host && !validateWsToken(config, host, req.url)) {
+    if (config && host && !validateWsToken(config, host, req.url, req.headers.authorization)) {
       ws.close(4401, 'Authentication required');
       logger.warn('WebSocket connection rejected — invalid or missing token');
       return;

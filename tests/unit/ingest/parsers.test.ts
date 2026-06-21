@@ -121,6 +121,32 @@ describe('JsonParser', () => {
   });
 });
 
+describe('PythonParser', () => {
+  it('should parse Python functions and classes', async () => {
+    const parser = getParser('py');
+    expect(parser).toBeDefined();
+
+    const content = `
+class Greeter:
+    """Says hello."""
+
+    def greet(self, name: str) -> str:
+        return f"Hello {name}"
+
+def main():
+    g = Greeter()
+    print(g.greet("world"))
+`;
+    const result = await parser!.parse(content, 'sample.py');
+    const functions = result.sections.filter((s) => s.type === 'function');
+    const classes = result.sections.filter((s) => s.type === 'class');
+
+    expect(classes.some((c) => c.title === 'Greeter')).toBe(true);
+    expect(functions.some((f) => f.title === 'greet')).toBe(true);
+    expect(functions.some((f) => f.title === 'main')).toBe(true);
+  });
+});
+
 describe('Parser Registry', () => {
   it('should return parser for supported extensions', () => {
     expect(getParser('md')).toBeDefined();
@@ -130,6 +156,7 @@ describe('Parser Registry', () => {
     expect(getParser('json')).toBeDefined();
     expect(getParser('yaml')).toBeDefined();
     expect(getParser('yml')).toBeDefined();
+    expect(getParser('py')).toBeDefined();
   });
 
   it('should return undefined for unsupported extensions', () => {
@@ -141,7 +168,8 @@ describe('Parser Registry', () => {
     const exts = getSupportedExtensions();
     expect(exts).toContain('md');
     expect(exts).toContain('ts');
+    expect(exts).toContain('py');
     expect(exts).toContain('json');
-    expect(exts.length).toBeGreaterThanOrEqual(7);
+    expect(exts.length).toBeGreaterThanOrEqual(8);
   });
 });

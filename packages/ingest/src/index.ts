@@ -15,3 +15,4 @@ export { FileWatcher, type WatcherOptions, type FileChangeHandler } from './watc
 
 // Pipeline
 export { IngestionPipeline, type PipelineOptions, type PipelineResult } from './pipeline.js';
+export { compileSecretPattern, compileSecretPatterns } from './secret-patterns.js';

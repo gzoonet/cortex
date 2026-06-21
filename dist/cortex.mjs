@@ -5,11 +5,20 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __esm = (fn, res) => function __init() {
-  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
 };
 var __commonJS = (cb, mod) => function __require() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  try {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  } catch (e) {
+    throw mod = 0, e;
+  }
 };
 var __export = (target, all) => {
   for (var name in all)
@@ -166,7 +175,7 @@ var init_schema = __esm({
         ".DS_Store",
         "Thumbs.db"
       ]),
-      fileTypes: z.array(z.string()).default(["md", "ts", "tsx", "js", "jsx", "json", "yaml", "yml"]),
+      fileTypes: z.array(z.string()).default(["md", "ts", "tsx", "js", "jsx", "py", "json", "yaml", "yml"]),
       maxFileSize: z.number().positive().default(10485760),
       maxFilesPerDir: z.number().positive().default(1e4),
       maxTotalFiles: z.number().positive().default(5e4),
@@ -223,10 +232,10 @@ var init_schema = __esm({
       taskRouting: z.record(z.string(), z.enum(["auto", "local", "cloud"])).default({
         entity_extraction: "auto",
         relationship_inference: "auto",
-        contradiction_detection: "local",
+        contradiction_detection: "auto",
         conversational_query: "auto",
         context_ranking: "auto",
-        embedding_generation: "local"
+        embedding_generation: "auto"
       }),
       temperature: z.record(z.string(), z.number().min(0).max(2)).default({
         extraction: 0.1,
@@ -247,11 +256,11 @@ var init_schema = __esm({
       logTransmissions: z.boolean().default(true),
       showTransmissionIndicator: z.boolean().default(true),
       secretPatterns: z.array(z.string()).default([
-        "(?i)(api[_-]?key|secret[_-]?key|access[_-]?token)\\s*[:=]\\s*[\\w\\-]{20,}",
+        "(api[_-]?key|secret[_-]?key|access[_-]?token)\\s*[:=]\\s*[\\w\\-]{20,}",
         "AKIA[0-9A-Z]{16}",
         "sk-ant-[a-zA-Z0-9\\-]{40,}",
         "ghp_[a-zA-Z0-9]{36}",
-        "(?i)password\\s*[:=]\\s*\\S{8,}"
+        "password\\s*[:=]\\s*\\S{8,}"
       ])
     });
     serverAuthSchema = z.object({
@@ -285,6 +294,30 @@ var init_schema = __esm({
   }
 });
 
+// packages/core/dist/config/deep-merge.js
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function deepMerge(base, override) {
+  const result = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    if (value === void 0)
+      continue;
+    const existing = result[key];
+    if (isPlainObject(existing) && isPlainObject(value)) {
+      result[key] = deepMerge(existing, value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+var init_deep_merge = __esm({
+  "packages/core/dist/config/deep-merge.js"() {
+    "use strict";
+  }
+});
+
 // packages/core/dist/config/loader.js
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
@@ -314,20 +347,33 @@ function loadDotEnv() {
   } catch {
   }
 }
-function findConfigFile(startDir) {
-  const searchPaths = [
-    startDir ? resolve(startDir, CONFIG_FILENAME) : null,
-    resolve(process.cwd(), CONFIG_FILENAME),
-    join(homedir(), ".cortex", CONFIG_FILENAME)
-  ].filter((p) => p !== null);
+function getGlobalConfigPath() {
+  return join(homedir(), ".cortex", CONFIG_FILENAME);
+}
+function getProjectConfigCandidates(startDir) {
   const envPath = process.env["CORTEX_CONFIG_PATH"];
   if (envPath) {
-    searchPaths.unshift(resolve(envPath));
+    return [resolve(envPath)];
   }
-  for (const p of searchPaths) {
-    if (existsSync(p))
-      return p;
+  return [
+    startDir ? resolve(startDir, CONFIG_FILENAME) : null,
+    resolve(process.cwd(), CONFIG_FILENAME)
+  ].filter((p) => p !== null);
+}
+function findProjectConfigFile(startDir) {
+  for (const candidate of getProjectConfigCandidates(startDir)) {
+    if (existsSync(candidate))
+      return candidate;
   }
+  return null;
+}
+function findConfigFile(startDir) {
+  const projectPath = findProjectConfigFile(startDir);
+  if (projectPath)
+    return projectPath;
+  const globalPath = getGlobalConfigPath();
+  if (existsSync(globalPath))
+    return globalPath;
   return null;
 }
 function readConfigFile(filePath) {
@@ -337,6 +383,18 @@ function readConfigFile(filePath) {
   } catch (err) {
     throw new CortexError(CONFIG_INVALID, "critical", "config", `Failed to read config file: ${filePath}: ${err instanceof Error ? err.message : String(err)}`, { filePath });
   }
+}
+function loadLayeredFileConfig(configDir) {
+  let merged = {};
+  const globalPath = getGlobalConfigPath();
+  if (existsSync(globalPath)) {
+    merged = deepMerge(merged, readConfigFile(globalPath));
+  }
+  const projectPath = findProjectConfigFile(configDir);
+  if (projectPath && projectPath !== globalPath) {
+    merged = deepMerge(merged, readConfigFile(projectPath));
+  }
+  return merged;
 }
 function applyEnvOverrides(config9) {
   const env = process.env;
@@ -372,22 +430,25 @@ function loadConfig(options = {}) {
   loadDotEnv();
   const { configDir, overrides, requireFile = false } = options;
   let fileConfig = {};
-  let configPath;
   if (requireFile && configDir) {
     const candidate = resolve(configDir, CONFIG_FILENAME);
-    configPath = existsSync(candidate) ? candidate : null;
+    if (existsSync(candidate)) {
+      fileConfig = readConfigFile(candidate);
+    } else if (!existsSync(getGlobalConfigPath())) {
+      throw new CortexError(CONFIG_MISSING, "critical", "config", `No cortex.config.json found in ${configDir} or ~/.cortex/. Run \`cortex init\` to create one.`, void 0, "Run `cortex init` to create a configuration file.");
+    } else {
+      fileConfig = loadLayeredFileConfig(configDir);
+    }
   } else {
-    configPath = findConfigFile(configDir);
-  }
-  if (configPath) {
-    fileConfig = readConfigFile(configPath);
-  } else if (requireFile) {
-    throw new CortexError(CONFIG_MISSING, "critical", "config", "No cortex.config.json found. Run `cortex init` to create one.", void 0, "Run `cortex init` to create a configuration file.");
+    fileConfig = loadLayeredFileConfig(configDir);
+    if (requireFile && Object.keys(fileConfig).length === 0) {
+      throw new CortexError(CONFIG_MISSING, "critical", "config", "No cortex.config.json found. Run `cortex init` to create one.", void 0, "Run `cortex init` to create a configuration file.");
+    }
   }
   let merged = { ...fileConfig };
   merged = applyEnvOverrides(merged);
   if (overrides) {
-    merged = { ...merged, ...overrides };
+    merged = deepMerge(merged, overrides);
   }
   const result = cortexConfigSchema.safeParse(merged);
   if (!result.success) {
@@ -406,6 +467,8 @@ var init_loader = __esm({
     "use strict";
     init_schema();
     init_cortex_error();
+    init_deep_merge();
+    init_deep_merge();
     CONFIG_FILENAME = "cortex.config.json";
   }
 });
@@ -571,1300 +634,1030 @@ var init_dist = __esm({
   }
 });
 
-// packages/graph/dist/migrations/001-initial.js
-function up(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS projects (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      root_path TEXT NOT NULL UNIQUE,
-      privacy_level TEXT NOT NULL DEFAULT 'standard',
-      file_count INTEGER DEFAULT 0,
-      entity_count INTEGER DEFAULT 0,
-      last_ingested_at TEXT,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS entities (
-      id TEXT PRIMARY KEY,
-      type TEXT NOT NULL,
-      name TEXT NOT NULL,
-      content TEXT NOT NULL,
-      summary TEXT,
-      properties TEXT,
-      confidence REAL NOT NULL,
-      source_file TEXT NOT NULL,
-      source_start_line INTEGER,
-      source_end_line INTEGER,
-      project_id TEXT NOT NULL,
-      extracted_by TEXT NOT NULL,
-      tags TEXT,
-      status TEXT NOT NULL DEFAULT 'active',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      deleted_at TEXT,
-      FOREIGN KEY (project_id) REFERENCES projects(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS relationships (
-      id TEXT PRIMARY KEY,
-      type TEXT NOT NULL,
-      source_entity_id TEXT NOT NULL,
-      target_entity_id TEXT NOT NULL,
-      description TEXT,
-      confidence REAL NOT NULL,
-      properties TEXT,
-      extracted_by TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      FOREIGN KEY (source_entity_id) REFERENCES entities(id),
-      FOREIGN KEY (target_entity_id) REFERENCES entities(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS files (
-      id TEXT PRIMARY KEY,
-      path TEXT NOT NULL UNIQUE,
-      relative_path TEXT NOT NULL,
-      project_id TEXT NOT NULL,
-      content_hash TEXT NOT NULL,
-      file_type TEXT NOT NULL,
-      size_bytes INTEGER NOT NULL,
-      last_modified TEXT NOT NULL,
-      last_ingested_at TEXT,
-      entity_ids TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',
-      parse_error TEXT,
-      FOREIGN KEY (project_id) REFERENCES projects(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS contradictions (
-      id TEXT PRIMARY KEY,
-      entity_id_a TEXT NOT NULL,
-      entity_id_b TEXT NOT NULL,
-      description TEXT NOT NULL,
-      severity TEXT NOT NULL,
-      suggested_resolution TEXT,
-      status TEXT NOT NULL DEFAULT 'active',
-      resolved_action TEXT,
-      resolved_at TEXT,
-      detected_at TEXT NOT NULL,
-      FOREIGN KEY (entity_id_a) REFERENCES entities(id),
-      FOREIGN KEY (entity_id_b) REFERENCES entities(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS token_usage (
-      id TEXT PRIMARY KEY,
-      request_id TEXT NOT NULL,
-      task TEXT NOT NULL,
-      provider TEXT NOT NULL,
-      model TEXT NOT NULL,
-      input_tokens INTEGER NOT NULL,
-      output_tokens INTEGER NOT NULL,
-      estimated_cost_usd REAL NOT NULL,
-      latency_ms INTEGER NOT NULL,
-      timestamp TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS dead_letter_queue (
-      id TEXT PRIMARY KEY,
-      type TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      error_code TEXT NOT NULL,
-      error_message TEXT NOT NULL,
-      retry_count INTEGER NOT NULL DEFAULT 0,
-      first_failed_at TEXT NOT NULL,
-      last_failed_at TEXT NOT NULL,
-      next_retry_at TEXT,
-      status TEXT NOT NULL DEFAULT 'pending'
-    );
-
-    -- Full-text search
-    CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(name, content, summary, tags);
-
-    -- Indexes
-    CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
-    CREATE INDEX IF NOT EXISTS idx_entities_project ON entities(project_id);
-    CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status);
-    CREATE INDEX IF NOT EXISTS idx_entities_source ON entities(source_file);
-    CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_entity_id);
-    CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_entity_id);
-    CREATE INDEX IF NOT EXISTS idx_relationships_type ON relationships(type);
-    CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
-    CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
-    CREATE INDEX IF NOT EXISTS idx_files_hash ON files(content_hash);
-    CREATE INDEX IF NOT EXISTS idx_token_usage_month ON token_usage(timestamp);
-    CREATE INDEX IF NOT EXISTS idx_dlq_status ON dead_letter_queue(status);
-
-    -- Schema version tracking
-    CREATE TABLE IF NOT EXISTS schema_version (
-      version INTEGER PRIMARY KEY,
-      applied_at TEXT NOT NULL
-    );
-
-    INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (${MIGRATION_VERSION}, datetime('now'));
-  `);
+// packages/ingest/dist/parsers/markdown.js
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+function getLineRange(node) {
+  return {
+    startLine: node.position?.start.line ?? 1,
+    endLine: node.position?.end.line ?? 1
+  };
 }
-var MIGRATION_VERSION;
-var init_initial = __esm({
-  "packages/graph/dist/migrations/001-initial.js"() {
+function extractText(node) {
+  if ("value" in node)
+    return node.value;
+  if ("children" in node) {
+    return node.children.map(extractText).join("");
+  }
+  return "";
+}
+var MarkdownParser;
+var init_markdown = __esm({
+  "packages/ingest/dist/parsers/markdown.js"() {
     "use strict";
-    MIGRATION_VERSION = 1;
+    MarkdownParser = class {
+      supportedExtensions = ["md", "mdx"];
+      async parse(content, filePath) {
+        const tree = unified().use(remarkParse).parse(content);
+        const sections = [];
+        let currentHeading;
+        for (const node of tree.children) {
+          const lines = getLineRange(node);
+          switch (node.type) {
+            case "heading": {
+              const text = extractText(node);
+              currentHeading = text;
+              sections.push({
+                type: "heading",
+                title: text,
+                content: text,
+                startLine: lines.startLine,
+                endLine: lines.endLine,
+                metadata: { depth: node.depth }
+              });
+              break;
+            }
+            case "paragraph": {
+              const text = extractText(node);
+              sections.push({
+                type: "paragraph",
+                title: currentHeading,
+                content: text,
+                startLine: lines.startLine,
+                endLine: lines.endLine
+              });
+              break;
+            }
+            case "code": {
+              sections.push({
+                type: "code",
+                title: currentHeading,
+                content: node.value,
+                language: node.lang ?? void 0,
+                startLine: lines.startLine,
+                endLine: lines.endLine,
+                metadata: { lang: node.lang }
+              });
+              break;
+            }
+            case "list": {
+              const items = node.children.map((item) => extractText(item)).join("\n");
+              sections.push({
+                type: "list",
+                title: currentHeading,
+                content: items,
+                startLine: lines.startLine,
+                endLine: lines.endLine,
+                metadata: { ordered: node.ordered }
+              });
+              break;
+            }
+            case "blockquote": {
+              const text = node.children.map(extractText).join("\n");
+              sections.push({
+                type: "paragraph",
+                title: currentHeading,
+                content: text,
+                startLine: lines.startLine,
+                endLine: lines.endLine,
+                metadata: { blockquote: true }
+              });
+              break;
+            }
+            case "table": {
+              const rows = node.children.map((row) => row.children.map(extractText).join(" | "));
+              sections.push({
+                type: "paragraph",
+                title: currentHeading,
+                content: rows.join("\n"),
+                startLine: lines.startLine,
+                endLine: lines.endLine,
+                metadata: { table: true }
+              });
+              break;
+            }
+            default:
+              break;
+          }
+        }
+        return {
+          sections,
+          metadata: {
+            filePath,
+            format: "markdown",
+            sectionCount: sections.length
+          }
+        };
+      }
+    };
   }
 });
 
-// packages/graph/dist/migrations/002-add-indexes.js
-function up2(db) {
-  const currentVersion = db.prepare("SELECT MAX(version) as v FROM schema_version").get()?.v ?? 0;
-  if (currentVersion >= MIGRATION_VERSION2)
-    return;
-  db.exec(`
-    -- Composite index for common entity queries (project + status + soft-delete filter)
-    CREATE INDEX IF NOT EXISTS idx_entities_project_status_deleted
-      ON entities(project_id, status, deleted_at);
-
-    -- Contradiction lookups by status and severity
-    CREATE INDEX IF NOT EXISTS idx_contradictions_status_severity
-      ON contradictions(status, severity);
-
-    -- Contradiction lookups by entity
-    CREATE INDEX IF NOT EXISTS idx_contradictions_entity_a
-      ON contradictions(entity_id_a);
-
-    CREATE INDEX IF NOT EXISTS idx_contradictions_entity_b
-      ON contradictions(entity_id_b);
-
-    -- Files by project + status (used during watch/ingest)
-    CREATE INDEX IF NOT EXISTS idx_files_project_status
-      ON files(project_id, status);
-
-    INSERT OR IGNORE INTO schema_version (version, applied_at)
-      VALUES (${MIGRATION_VERSION2}, datetime('now'));
-  `);
+// packages/ingest/dist/parsers/typescript.js
+import TreeSitter from "tree-sitter";
+import TreeSitterTypeScript from "tree-sitter-typescript";
+function createParser(language) {
+  const parser = new TreeSitter();
+  parser.setLanguage(language);
+  return parser;
 }
-var MIGRATION_VERSION2;
-var init_add_indexes = __esm({
-  "packages/graph/dist/migrations/002-add-indexes.js"() {
+function nodeText(node, source) {
+  return source.slice(node.startIndex, node.endIndex);
+}
+function extractName(node, source) {
+  const nameNode = node.childForFieldName("name");
+  if (nameNode)
+    return nodeText(nameNode, source);
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (child && child.type === "variable_declarator") {
+      const varName = child.childForFieldName("name");
+      if (varName)
+        return nodeText(varName, source);
+    }
+  }
+  return void 0;
+}
+var tsLanguage, tsxLanguage, TypeScriptParser;
+var init_typescript = __esm({
+  "packages/ingest/dist/parsers/typescript.js"() {
     "use strict";
-    MIGRATION_VERSION2 = 2;
+    tsLanguage = TreeSitterTypeScript.typescript;
+    tsxLanguage = TreeSitterTypeScript.tsx;
+    TypeScriptParser = class {
+      supportedExtensions = ["ts", "tsx", "js", "jsx"];
+      tsParser;
+      tsxParser;
+      constructor() {
+        this.tsParser = createParser(tsLanguage);
+        this.tsxParser = createParser(tsxLanguage);
+      }
+      async parse(content, filePath) {
+        const isTsx = filePath.endsWith(".tsx") || filePath.endsWith(".jsx");
+        const parser = isTsx ? this.tsxParser : this.tsParser;
+        const tree = parser.parse(content);
+        const sections = [];
+        this.walkNode(tree.rootNode, content, sections);
+        return {
+          sections,
+          metadata: {
+            filePath,
+            format: isTsx ? "tsx" : "typescript",
+            sectionCount: sections.length
+          }
+        };
+      }
+      walkNode(node, source, sections) {
+        for (let i = 0; i < node.childCount; i++) {
+          const child = node.child(i);
+          if (!child)
+            continue;
+          switch (child.type) {
+            case "function_declaration":
+            case "generator_function_declaration":
+              sections.push({
+                type: "function",
+                title: extractName(child, source),
+                content: nodeText(child, source),
+                startLine: child.startPosition.row + 1,
+                endLine: child.endPosition.row + 1
+              });
+              break;
+            case "class_declaration":
+              sections.push({
+                type: "class",
+                title: extractName(child, source),
+                content: nodeText(child, source),
+                startLine: child.startPosition.row + 1,
+                endLine: child.endPosition.row + 1
+              });
+              break;
+            case "interface_declaration":
+            case "type_alias_declaration":
+              sections.push({
+                type: "interface",
+                title: extractName(child, source),
+                content: nodeText(child, source),
+                startLine: child.startPosition.row + 1,
+                endLine: child.endPosition.row + 1
+              });
+              break;
+            case "enum_declaration":
+              sections.push({
+                type: "interface",
+                title: extractName(child, source),
+                content: nodeText(child, source),
+                startLine: child.startPosition.row + 1,
+                endLine: child.endPosition.row + 1,
+                metadata: { kind: "enum" }
+              });
+              break;
+            case "export_statement": {
+              const declaration = child.childForFieldName("declaration");
+              if (declaration) {
+                this.walkExportedNode(declaration, child, source, sections);
+              } else {
+                sections.push({
+                  type: "export",
+                  content: nodeText(child, source),
+                  startLine: child.startPosition.row + 1,
+                  endLine: child.endPosition.row + 1
+                });
+              }
+              break;
+            }
+            case "lexical_declaration": {
+              const text = nodeText(child, source);
+              if (text.length > 50) {
+                sections.push({
+                  type: "export",
+                  title: extractName(child, source),
+                  content: text,
+                  startLine: child.startPosition.row + 1,
+                  endLine: child.endPosition.row + 1
+                });
+              }
+              break;
+            }
+            case "comment":
+              sections.push({
+                type: "comment",
+                content: nodeText(child, source),
+                startLine: child.startPosition.row + 1,
+                endLine: child.endPosition.row + 1
+              });
+              break;
+            case "import_statement":
+              break;
+            default:
+              if (child.childCount > 0) {
+                this.walkNode(child, source, sections);
+              }
+              break;
+          }
+        }
+      }
+      walkExportedNode(declaration, exportNode, source, sections) {
+        const fullText = nodeText(exportNode, source);
+        const name = extractName(declaration, source);
+        switch (declaration.type) {
+          case "function_declaration":
+          case "generator_function_declaration":
+            sections.push({
+              type: "function",
+              title: name,
+              content: fullText,
+              startLine: exportNode.startPosition.row + 1,
+              endLine: exportNode.endPosition.row + 1,
+              metadata: { exported: true }
+            });
+            break;
+          case "class_declaration":
+            sections.push({
+              type: "class",
+              title: name,
+              content: fullText,
+              startLine: exportNode.startPosition.row + 1,
+              endLine: exportNode.endPosition.row + 1,
+              metadata: { exported: true }
+            });
+            break;
+          case "interface_declaration":
+          case "type_alias_declaration":
+            sections.push({
+              type: "interface",
+              title: name,
+              content: fullText,
+              startLine: exportNode.startPosition.row + 1,
+              endLine: exportNode.endPosition.row + 1,
+              metadata: { exported: true }
+            });
+            break;
+          default:
+            sections.push({
+              type: "export",
+              title: name,
+              content: fullText,
+              startLine: exportNode.startPosition.row + 1,
+              endLine: exportNode.endPosition.row + 1,
+              metadata: { exported: true }
+            });
+            break;
+        }
+      }
+    };
   }
 });
 
-// packages/graph/dist/sqlite-store.js
-import Database from "better-sqlite3";
-import { randomUUID } from "node:crypto";
-import { copyFileSync, statSync, mkdirSync as mkdirSync3, chmodSync } from "node:fs";
-import { dirname } from "node:path";
-import { homedir as homedir4 } from "node:os";
-function resolveHomePath(p) {
-  return p.startsWith("~") ? p.replace("~", homedir4()) : p;
+// packages/ingest/dist/parsers/python.js
+import TreeSitter2 from "tree-sitter";
+import TreeSitterPython from "tree-sitter-python";
+function createParser2(language) {
+  const parser = new TreeSitter2();
+  parser.setLanguage(language);
+  return parser;
 }
-function now() {
-  return (/* @__PURE__ */ new Date()).toISOString();
+function nodeText2(node, source) {
+  return source.slice(node.startIndex, node.endIndex);
 }
-function rowToContradiction(row) {
-  return {
-    id: row.id,
-    entityIds: [row.entity_id_a, row.entity_id_b],
-    description: row.description,
-    severity: row.severity,
-    suggestedResolution: row.suggested_resolution ?? void 0,
-    status: row.status,
-    resolvedAction: row.resolved_action ?? void 0,
-    resolvedAt: row.resolved_at ?? void 0,
-    detectedAt: row.detected_at
-  };
+function extractName2(node, source) {
+  const nameNode = node.childForFieldName("name");
+  if (nameNode)
+    return nodeText2(nameNode, source);
+  return void 0;
 }
-function rowToEntity(row) {
-  return {
-    id: row.id,
-    type: row.type,
-    name: row.name,
-    content: row.content,
-    summary: row.summary ?? void 0,
-    properties: row.properties ? JSON.parse(row.properties) : {},
-    confidence: row.confidence,
-    sourceFile: row.source_file,
-    sourceRange: row.source_start_line != null && row.source_end_line != null ? { startLine: row.source_start_line, endLine: row.source_end_line } : void 0,
-    projectId: row.project_id,
-    extractedBy: JSON.parse(row.extracted_by),
-    tags: row.tags ? JSON.parse(row.tags) : [],
-    status: row.status,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-function rowToRelationship(row) {
-  return {
-    id: row.id,
-    type: row.type,
-    sourceEntityId: row.source_entity_id,
-    targetEntityId: row.target_entity_id,
-    description: row.description ?? void 0,
-    confidence: row.confidence,
-    properties: row.properties ? JSON.parse(row.properties) : {},
-    extractedBy: JSON.parse(row.extracted_by),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-function rowToFile(row) {
-  return {
-    id: row.id,
-    path: row.path,
-    relativePath: row.relative_path,
-    projectId: row.project_id,
-    contentHash: row.content_hash,
-    fileType: row.file_type,
-    sizeBytes: row.size_bytes,
-    lastModified: row.last_modified,
-    lastIngestedAt: row.last_ingested_at ?? void 0,
-    entityIds: row.entity_ids ? JSON.parse(row.entity_ids) : [],
-    status: row.status,
-    parseError: row.parse_error ?? void 0
-  };
-}
-function rowToProject(row) {
-  return {
-    id: row.id,
-    name: row.name,
-    rootPath: row.root_path,
-    privacyLevel: row.privacy_level,
-    fileCount: row.file_count,
-    entityCount: row.entity_count,
-    lastIngestedAt: row.last_ingested_at ?? void 0,
-    createdAt: row.created_at
-  };
-}
-var SQLiteStore;
-var init_sqlite_store = __esm({
-  "packages/graph/dist/sqlite-store.js"() {
+var pythonLanguage, PythonParser;
+var init_python = __esm({
+  "packages/ingest/dist/parsers/python.js"() {
     "use strict";
-    init_dist();
-    init_initial();
-    init_add_indexes();
-    SQLiteStore = class {
-      db;
-      dbPath;
-      constructor(options = {}) {
-        const { dbPath = "~/.cortex/cortex.db", walMode = true, backupOnStartup = true } = options;
-        this.dbPath = resolveHomePath(dbPath);
-        mkdirSync3(dirname(this.dbPath), { recursive: true, mode: 448 });
-        if (backupOnStartup) {
-          this.backupSync();
-        }
-        this.db = new Database(this.dbPath);
-        try {
-          chmodSync(this.dbPath, 384);
-        } catch {
-        }
-        if (walMode) {
-          this.db.pragma("journal_mode = WAL");
-        }
-        this.db.pragma("foreign_keys = ON");
-        this.db.pragma("busy_timeout = 5000");
-        this.migrate();
+    pythonLanguage = TreeSitterPython;
+    PythonParser = class {
+      supportedExtensions = ["py"];
+      parser;
+      constructor() {
+        this.parser = createParser2(pythonLanguage);
       }
-      migrate() {
-        try {
-          up(this.db);
-          up2(this.db);
-        } catch (err) {
-          throw new CortexError(GRAPH_DB_ERROR, "critical", "graph", `Migration failed: ${err instanceof Error ? err.message : String(err)}`, void 0, "Delete the database and restart.");
+      async parse(content, filePath) {
+        const tree = this.parser.parse(content);
+        const sections = [];
+        this.walkNode(tree.rootNode, content, sections);
+        return {
+          sections,
+          metadata: {
+            filePath,
+            format: "python",
+            sectionCount: sections.length
+          }
+        };
+      }
+      walkNode(node, source, sections) {
+        for (let i = 0; i < node.childCount; i++) {
+          const child = node.child(i);
+          if (!child)
+            continue;
+          switch (child.type) {
+            case "function_definition":
+              sections.push({
+                type: "function",
+                title: extractName2(child, source),
+                content: nodeText2(child, source),
+                startLine: child.startPosition.row + 1,
+                endLine: child.endPosition.row + 1
+              });
+              break;
+            case "class_definition":
+              sections.push({
+                type: "class",
+                title: extractName2(child, source),
+                content: nodeText2(child, source),
+                startLine: child.startPosition.row + 1,
+                endLine: child.endPosition.row + 1
+              });
+              {
+                const body = child.childForFieldName("body");
+                if (body)
+                  this.walkNode(body, source, sections);
+              }
+              break;
+            case "decorated_definition": {
+              const definition = child.namedChildren.find((n) => n.type === "function_definition" || n.type === "class_definition");
+              if (definition) {
+                const defType = definition.type === "class_definition" ? "class" : "function";
+                sections.push({
+                  type: defType,
+                  title: extractName2(definition, source),
+                  content: nodeText2(child, source),
+                  startLine: child.startPosition.row + 1,
+                  endLine: child.endPosition.row + 1,
+                  metadata: { decorated: true }
+                });
+              }
+              break;
+            }
+            case "comment":
+              sections.push({
+                type: "comment",
+                content: nodeText2(child, source),
+                startLine: child.startPosition.row + 1,
+                endLine: child.endPosition.row + 1
+              });
+              break;
+            case "import_statement":
+            case "import_from_statement":
+              break;
+            default:
+              if (child.childCount > 0) {
+                this.walkNode(child, source, sections);
+              }
+              break;
+          }
         }
       }
-      backupSync() {
-        try {
-          const stat = statSync(this.dbPath);
-          if (stat.isFile()) {
-            const backupPath = `${this.dbPath}.backup`;
-            copyFileSync(this.dbPath, backupPath);
-            try {
-              chmodSync(backupPath, 384);
-            } catch {
+    };
+  }
+});
+
+// packages/ingest/dist/parsers/json-parser.js
+function stripJsonComments(text) {
+  let result = "";
+  let i = 0;
+  let inString = false;
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (ch === '"' && (i === 0 || text[i - 1] !== "\\")) {
+      inString = !inString;
+      result += ch;
+      i++;
+      continue;
+    }
+    if (inString) {
+      result += ch;
+      i++;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      i += 2;
+      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) {
+        result += text[i] === "\n" ? "\n" : " ";
+        i++;
+      }
+      i += 2;
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      i += 2;
+      while (i < text.length && text[i] !== "\n")
+        i++;
+      continue;
+    }
+    result += ch;
+    i++;
+  }
+  result = result.replace(/,\s*([\]\}])/g, "$1");
+  return result;
+}
+function parseJsonOrJsonc(content) {
+  try {
+    return JSON.parse(content);
+  } catch {
+    return JSON.parse(stripJsonComments(content));
+  }
+}
+var JsonParser;
+var init_json_parser = __esm({
+  "packages/ingest/dist/parsers/json-parser.js"() {
+    "use strict";
+    JsonParser = class {
+      supportedExtensions = ["json"];
+      async parse(content, filePath) {
+        const parsed = parseJsonOrJsonc(content);
+        const sections = [];
+        if (typeof parsed !== "object" || parsed === null) {
+          sections.push({
+            type: "unknown",
+            content,
+            startLine: 1,
+            endLine: content.split("\n").length
+          });
+          return { sections, metadata: { filePath, format: "json" } };
+        }
+        const obj = parsed;
+        const lines = content.split("\n");
+        for (const [key, value] of Object.entries(obj)) {
+          const valueStr = JSON.stringify(value, null, 2);
+          const keyPattern = `"${key}"`;
+          let startLine = 1;
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes(keyPattern)) {
+              startLine = i + 1;
+              break;
             }
           }
-        } catch {
+          const valueLines = valueStr.split("\n").length;
+          sections.push({
+            type: "property",
+            title: key,
+            content: `${key}: ${valueStr}`,
+            startLine,
+            endLine: startLine + valueLines - 1,
+            metadata: {
+              key,
+              valueType: Array.isArray(value) ? "array" : typeof value
+            }
+          });
         }
-      }
-      close() {
-        this.db.close();
-      }
-      transaction(fn) {
-        return this.db.transaction(fn)();
-      }
-      // --- Entities ---
-      createEntitySync(entity) {
-        return this._createEntity(entity);
-      }
-      async createEntity(entity) {
-        return this._createEntity(entity);
-      }
-      _createEntity(entity) {
-        const id = randomUUID();
-        const ts = now();
-        this.db.prepare(`
-      INSERT INTO entities (
-        id, type, name, content, summary, properties, confidence,
-        source_file, source_start_line, source_end_line,
-        project_id, extracted_by, tags, status, created_at, updated_at
-      ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?,
-        ?, ?, ?, ?, ?, ?
-      )
-    `).run(id, entity.type, entity.name, entity.content, entity.summary ?? null, JSON.stringify(entity.properties), entity.confidence, entity.sourceFile, entity.sourceRange?.startLine ?? null, entity.sourceRange?.endLine ?? null, entity.projectId, JSON.stringify(entity.extractedBy), JSON.stringify(entity.tags), entity.status, ts, ts);
-        this.db.prepare(`
-      INSERT INTO entities_fts (rowid, name, content, summary, tags)
-      VALUES (
-        (SELECT rowid FROM entities WHERE id = ?),
-        ?, ?, ?, ?
-      )
-    `).run(id, entity.name, entity.content, entity.summary ?? "", entity.tags.join(" "));
-        return { ...entity, id, createdAt: ts, updatedAt: ts };
-      }
-      async getEntity(id) {
-        const row = this.db.prepare("SELECT * FROM entities WHERE id = ? AND deleted_at IS NULL").get(id);
-        return row ? rowToEntity(row) : null;
-      }
-      async updateEntity(id, updates) {
-        const existing = await this.getEntity(id);
-        if (!existing) {
-          throw new CortexError(GRAPH_ENTITY_NOT_FOUND, "low", "graph", `Entity not found: ${id}`, { entityId: id });
+        const metadata = {
+          filePath,
+          format: "json",
+          sectionCount: sections.length
+        };
+        if (filePath.endsWith("package.json")) {
+          metadata.packageName = obj["name"];
+          metadata.packageVersion = obj["version"];
+        } else if (filePath.endsWith("tsconfig.json") || filePath.endsWith("tsconfig.base.json")) {
+          metadata.tsconfigType = "typescript-config";
         }
-        const merged = { ...existing, ...updates, updatedAt: now() };
-        this.db.prepare(`
-      UPDATE entities SET
-        type = ?, name = ?, content = ?, summary = ?,
-        properties = ?, confidence = ?,
-        source_file = ?, source_start_line = ?, source_end_line = ?,
-        extracted_by = ?, tags = ?, status = ?, updated_at = ?
-      WHERE id = ?
-    `).run(merged.type, merged.name, merged.content, merged.summary ?? null, JSON.stringify(merged.properties), merged.confidence, merged.sourceFile, merged.sourceRange?.startLine ?? null, merged.sourceRange?.endLine ?? null, JSON.stringify(merged.extractedBy), JSON.stringify(merged.tags), merged.status, merged.updatedAt, id);
-        this.db.prepare(`
-      UPDATE entities_fts SET name = ?, content = ?, summary = ?, tags = ?
-      WHERE rowid = (SELECT rowid FROM entities WHERE id = ?)
-    `).run(merged.name, merged.content, merged.summary ?? "", merged.tags.join(" "), id);
-        return merged;
+        return { sections, metadata };
       }
-      async deleteEntity(id, soft = true) {
-        if (soft) {
-          this.db.prepare("UPDATE entities SET deleted_at = ?, status = ? WHERE id = ?").run(now(), "deleted", id);
-        } else {
-          this.db.prepare("DELETE FROM entities_fts WHERE rowid = (SELECT rowid FROM entities WHERE id = ?)").run(id);
-          this.db.prepare("DELETE FROM entities WHERE id = ?").run(id);
+    };
+  }
+});
+
+// packages/ingest/dist/parsers/yaml-parser.js
+import { parse as parseYaml } from "yaml";
+var YamlParser;
+var init_yaml_parser = __esm({
+  "packages/ingest/dist/parsers/yaml-parser.js"() {
+    "use strict";
+    YamlParser = class {
+      supportedExtensions = ["yaml", "yml"];
+      async parse(content, filePath) {
+        const parsed = parseYaml(content);
+        const sections = [];
+        if (typeof parsed !== "object" || parsed === null) {
+          sections.push({
+            type: "unknown",
+            content,
+            startLine: 1,
+            endLine: content.split("\n").length
+          });
+          return { sections, metadata: { filePath, format: "yaml" } };
         }
-      }
-      async findEntities(query) {
-        const conditions = ["deleted_at IS NULL"];
-        const params = [];
-        if (query.type) {
-          conditions.push("type = ?");
-          params.push(query.type);
-        }
-        if (query.projectId) {
-          conditions.push("project_id = ?");
-          params.push(query.projectId);
-        }
-        if (query.status) {
-          conditions.push("status = ?");
-          params.push(query.status);
-        }
-        if (query.since) {
-          conditions.push("created_at >= ?");
-          params.push(query.since);
-        }
-        if (query.before) {
-          conditions.push("created_at < ?");
-          params.push(query.before);
-        }
-        let sql;
-        if (query.search) {
-          const sanitizedSearch = query.search.replace(/[^a-zA-Z0-9\s]/g, " ").trim();
-          if (!sanitizedSearch) {
-            return [];
+        const obj = parsed;
+        const lines = content.split("\n");
+        for (const [key, value] of Object.entries(obj)) {
+          const valueStr = typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
+          let startLine = 1;
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].startsWith(`${key}:`) || lines[i].startsWith(`${key} :`)) {
+              startLine = i + 1;
+              break;
+            }
           }
-          sql = `
-        SELECT e.* FROM entities e
-        JOIN entities_fts fts ON fts.rowid = e.rowid
-        WHERE fts.entities_fts MATCH ? AND ${conditions.join(" AND ")}
-        ORDER BY rank
-      `;
-          params.unshift(sanitizedSearch);
-        } else {
-          sql = `
-        SELECT * FROM entities
-        WHERE ${conditions.join(" AND ")}
-        ORDER BY created_at DESC
-      `;
+          sections.push({
+            type: "property",
+            title: key,
+            content: `${key}: ${valueStr}`,
+            startLine,
+            endLine: startLine + valueStr.split("\n").length - 1,
+            metadata: {
+              key,
+              valueType: Array.isArray(value) ? "array" : typeof value
+            }
+          });
         }
-        if (query.limit) {
-          sql += " LIMIT ?";
-          params.push(query.limit);
+        return {
+          sections,
+          metadata: {
+            filePath,
+            format: "yaml",
+            sectionCount: sections.length
+          }
+        };
+      }
+    };
+  }
+});
+
+// packages/ingest/dist/parsers/conversation.js
+function isConversationJson(content) {
+  try {
+    const obj = JSON.parse(content);
+    if (Array.isArray(obj) && obj.length > 0) {
+      const first = obj[0];
+      return Array.isArray(first?.mapping) || typeof first?.mapping === "object" || Array.isArray(first?.messages);
+    }
+    if (Array.isArray(obj?.conversations))
+      return true;
+    if (Array.isArray(obj?.messages) && obj.messages[0]?.role !== void 0)
+      return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+function isConversationMarkdown(content) {
+  const lines = content.split("\n");
+  const headings = [];
+  for (const line of lines) {
+    const m = line.match(/^#{1,3}\s+(\S.*)$/);
+    if (m) {
+      headings.push(m[1].trim());
+      if (headings.length >= 2)
+        break;
+    }
+  }
+  if (headings.length < 2)
+    return false;
+  return HUMAN_PATTERN.test(headings[0]) && ASSISTANT_PATTERN.test(headings[1]);
+}
+function parseConversationJson(content) {
+  const obj = JSON.parse(content);
+  const sections = [];
+  let messages = [];
+  if (Array.isArray(obj)) {
+    const first = obj[0];
+    if (first?.mapping && typeof first.mapping === "object") {
+      for (const node of Object.values(first.mapping)) {
+        const msg = node?.message;
+        if (!msg?.author?.role || !msg.content?.parts)
+          continue;
+        const text = msg.content.parts.join("\n").trim();
+        if (text)
+          messages.push({ role: msg.author.role, content: text });
+      }
+    } else if (Array.isArray(first?.messages)) {
+      messages = first.messages;
+    }
+  } else if (Array.isArray(obj?.conversations)) {
+    messages = obj.conversations[0]?.messages ?? [];
+  } else if (Array.isArray(obj?.messages)) {
+    messages = obj.messages;
+  }
+  let lineNum = 1;
+  for (const msg of messages) {
+    const role = (msg.role ?? msg.author?.role ?? "unknown").toLowerCase();
+    if (role === "system")
+      continue;
+    const text = typeof msg.content === "string" ? msg.content : msg.text ?? JSON.stringify(msg.content);
+    if (!text || text.trim().length < 50)
+      continue;
+    const endLine = lineNum + text.split("\n").length;
+    sections.push({
+      type: "paragraph",
+      title: role === "user" ? "Human" : "Assistant",
+      content: text.trim(),
+      startLine: lineNum,
+      endLine,
+      metadata: { role, speaker: role === "user" ? "human" : "assistant" }
+    });
+    lineNum = endLine + 1;
+  }
+  return sections;
+}
+function parseConversationMarkdown(content) {
+  const sections = [];
+  const lines = content.split("\n");
+  let currentRole = null;
+  let blockStart = 0;
+  const blockLines = [];
+  const flush = (endLine) => {
+    if (!currentRole || blockLines.length === 0)
+      return;
+    const text = blockLines.join("\n").trim();
+    if (text.length >= 50) {
+      sections.push({
+        type: "paragraph",
+        title: currentRole,
+        content: text,
+        startLine: blockStart,
+        endLine,
+        metadata: {
+          role: HUMAN_PATTERN.test(currentRole) ? "user" : "assistant",
+          speaker: HUMAN_PATTERN.test(currentRole) ? "human" : "assistant"
         }
-        if (query.offset) {
-          sql += " OFFSET ?";
-          params.push(query.offset);
+      });
+    }
+    blockLines.length = 0;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const headingMatch = line.match(/^#{1,3}\s+(\S.*)$/);
+    if (headingMatch) {
+      flush(i);
+      currentRole = headingMatch[1].trim();
+      blockStart = i + 2;
+    } else if (currentRole) {
+      blockLines.push(line);
+    }
+  }
+  flush(lines.length);
+  return sections;
+}
+var HUMAN_PATTERN, ASSISTANT_PATTERN, ConversationParser;
+var init_conversation = __esm({
+  "packages/ingest/dist/parsers/conversation.js"() {
+    "use strict";
+    HUMAN_PATTERN = /^(Human|User|Me)$/i;
+    ASSISTANT_PATTERN = /^(Assistant|Claude|ChatGPT|GPT)$/i;
+    ConversationParser = class {
+      supportedExtensions = ["json", "md"];
+      async parse(content, filePath) {
+        const isJson = filePath.endsWith(".json") || filePath.endsWith(".JSON");
+        const sections = isJson ? parseConversationJson(content) : parseConversationMarkdown(content);
+        return {
+          sections,
+          metadata: {
+            format: isJson ? "conversation-json" : "conversation-markdown",
+            messageCount: sections.length
+          }
+        };
+      }
+    };
+  }
+});
+
+// packages/ingest/dist/parsers/index.js
+function getParser(extension, filePath, content) {
+  const ext = extension.toLowerCase();
+  if (content !== void 0 && filePath !== void 0) {
+    if (ext === "json" && isConversationJson(content))
+      return conversationParser;
+    if ((ext === "md" || ext === "mdx") && isConversationMarkdown(content))
+      return conversationParser;
+  }
+  return PARSER_REGISTRY.get(ext);
+}
+function getSupportedExtensions() {
+  return [...PARSER_REGISTRY.keys()];
+}
+var markdownParser, typescriptParser, pythonParser, jsonParser, yamlParser, conversationParser, PARSER_REGISTRY;
+var init_parsers = __esm({
+  "packages/ingest/dist/parsers/index.js"() {
+    "use strict";
+    init_markdown();
+    init_typescript();
+    init_python();
+    init_json_parser();
+    init_yaml_parser();
+    init_conversation();
+    markdownParser = new MarkdownParser();
+    typescriptParser = new TypeScriptParser();
+    pythonParser = new PythonParser();
+    jsonParser = new JsonParser();
+    yamlParser = new YamlParser();
+    conversationParser = new ConversationParser();
+    PARSER_REGISTRY = /* @__PURE__ */ new Map([
+      ["md", markdownParser],
+      ["mdx", markdownParser],
+      ["ts", typescriptParser],
+      ["tsx", typescriptParser],
+      ["js", typescriptParser],
+      ["jsx", typescriptParser],
+      ["py", pythonParser],
+      ["json", jsonParser],
+      ["yaml", yamlParser],
+      ["yml", yamlParser]
+    ]);
+  }
+});
+
+// packages/ingest/dist/chunker.js
+function estimateTokens(text) {
+  return Math.ceil(text.length / AVG_CHARS_PER_TOKEN);
+}
+function chunkSections(sections, options = {}) {
+  const maxTokens = options.maxTokens ?? 2e3;
+  const overlapTokens = options.overlapTokens ?? 200;
+  const maxChars = maxTokens * AVG_CHARS_PER_TOKEN;
+  const overlapChars = overlapTokens * AVG_CHARS_PER_TOKEN;
+  if (sections.length === 0)
+    return [];
+  const chunks = [];
+  let currentContent = "";
+  let currentStartLine = sections[0].startLine;
+  let currentEndLine = sections[0].startLine;
+  let currentTitles = [];
+  let overlapBuffer = "";
+  for (const section of sections) {
+    const sectionText = section.title ? `## ${section.title}
+${section.content}` : section.content;
+    const sectionTokens = estimateTokens(sectionText);
+    if (sectionTokens > maxTokens) {
+      if (currentContent.length > 0) {
+        chunks.push(buildChunk(currentContent, currentStartLine, currentEndLine, currentTitles, chunks.length));
+        overlapBuffer = currentContent.slice(-overlapChars);
+        currentContent = "";
+        currentTitles = [];
+      }
+      const subChunks = splitLargeText(sectionText, maxChars, overlapChars, section, chunks.length);
+      chunks.push(...subChunks);
+      overlapBuffer = subChunks.length > 0 ? subChunks[subChunks.length - 1].content.slice(-overlapChars) : "";
+      currentStartLine = section.endLine + 1;
+      currentEndLine = section.endLine;
+      continue;
+    }
+    const combined = currentContent + (currentContent ? "\n\n" : "") + sectionText;
+    if (estimateTokens(combined) > maxTokens && currentContent.length > 0) {
+      chunks.push(buildChunk(currentContent, currentStartLine, currentEndLine, currentTitles, chunks.length));
+      overlapBuffer = currentContent.slice(-overlapChars);
+      currentContent = overlapBuffer + "\n\n" + sectionText;
+      currentStartLine = section.startLine;
+      currentEndLine = section.endLine;
+      currentTitles = section.title ? [section.title] : [];
+    } else {
+      if (currentContent.length === 0 && overlapBuffer.length > 0) {
+        currentContent = overlapBuffer + "\n\n" + sectionText;
+      } else {
+        currentContent = combined;
+      }
+      if (currentContent === sectionText || currentContent === combined) {
+        if (chunks.length === 0)
+          currentStartLine = section.startLine;
+      }
+      currentEndLine = section.endLine;
+      if (section.title && !currentTitles.includes(section.title)) {
+        currentTitles.push(section.title);
+      }
+    }
+  }
+  if (currentContent.trim().length > 0) {
+    chunks.push(buildChunk(currentContent, currentStartLine, currentEndLine, currentTitles, chunks.length));
+  }
+  return chunks;
+}
+function buildChunk(content, startLine, endLine, titles, index) {
+  return {
+    content: content.trim(),
+    startLine,
+    endLine,
+    sectionTitles: [...titles],
+    tokenEstimate: estimateTokens(content),
+    index
+  };
+}
+function splitLargeText(text, maxChars, overlapChars, section, startIndex) {
+  const chunks = [];
+  const lines = text.split("\n");
+  let currentChunk = "";
+  let chunkStartLine = section.startLine;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const next = currentChunk + (currentChunk ? "\n" : "") + line;
+    if (next.length > maxChars && currentChunk.length > 0) {
+      const lineOffset = section.startLine + i;
+      chunks.push(buildChunk(currentChunk, chunkStartLine, lineOffset - 1, section.title ? [section.title] : [], startIndex + chunks.length));
+      const overlap = currentChunk.slice(-overlapChars);
+      currentChunk = overlap + "\n" + line;
+      chunkStartLine = lineOffset;
+    } else {
+      currentChunk = next;
+    }
+  }
+  if (currentChunk.trim().length > 0) {
+    chunks.push(buildChunk(currentChunk, chunkStartLine, section.endLine, section.title ? [section.title] : [], startIndex + chunks.length));
+  }
+  return chunks;
+}
+var AVG_CHARS_PER_TOKEN;
+var init_chunker = __esm({
+  "packages/ingest/dist/chunker.js"() {
+    "use strict";
+    AVG_CHARS_PER_TOKEN = 4;
+  }
+});
+
+// packages/ingest/dist/watcher.js
+import { watch } from "chokidar";
+import { extname } from "node:path";
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function globToRegex(pattern) {
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+  const regexStr = escaped.replace(/\*\*/g, "___GLOBSTAR___").replace(/\*/g, "[^/\\\\]*").replace(/___GLOBSTAR___/g, ".*");
+  return new RegExp("^" + regexStr + "$");
+}
+var logger, FileWatcher;
+var init_watcher = __esm({
+  "packages/ingest/dist/watcher.js"() {
+    "use strict";
+    init_dist();
+    logger = createLogger("ingest:watcher");
+    FileWatcher = class _FileWatcher {
+      watcher = null;
+      options;
+      handler = null;
+      debounceTimers = /* @__PURE__ */ new Map();
+      compiledExcludePatterns;
+      constructor(options) {
+        this.options = options;
+        this.compiledExcludePatterns = options.exclude.map((pattern) => {
+          if (pattern.includes("*")) {
+            return { pattern: globToRegex(pattern), isGlob: true };
+          }
+          return pattern;
+        });
+      }
+      static fromConfig(config9) {
+        return new _FileWatcher({
+          dirs: config9.watchDirs,
+          exclude: config9.exclude,
+          fileTypes: config9.fileTypes,
+          debounceMs: config9.debounceMs,
+          followSymlinks: config9.followSymlinks,
+          maxFileSize: config9.maxFileSize
+        });
+      }
+      onFileChange(handler) {
+        this.handler = handler;
+      }
+      start() {
+        if (this.watcher)
+          return;
+        const ignored = this.buildIgnorePatterns();
+        this.watcher = watch(this.options.dirs, {
+          ignored,
+          persistent: true,
+          ignoreInitial: this.options.ignoreInitial ?? false,
+          followSymlinks: this.options.followSymlinks,
+          awaitWriteFinish: {
+            stabilityThreshold: 200,
+            pollInterval: 100
+          }
+        });
+        this.watcher.on("add", (path) => this.handleEvent(path, "add"));
+        this.watcher.on("change", (path) => this.handleEvent(path, "change"));
+        this.watcher.on("unlink", (path) => this.handleEvent(path, "unlink"));
+        this.watcher.on("error", (error) => {
+          logger.error("Watcher error", { error: error instanceof Error ? error.message : String(error) });
+        });
+        this.watcher.on("ready", () => {
+          logger.info("File watcher ready", { dirs: this.options.dirs });
+        });
+      }
+      async stop() {
+        if (!this.watcher)
+          return;
+        for (const timer of this.debounceTimers.values()) {
+          clearTimeout(timer);
         }
-        const rows = this.db.prepare(sql).all(...params);
-        return rows.map(rowToEntity);
+        this.debounceTimers.clear();
+        await this.watcher.close();
+        this.watcher = null;
+        logger.info("File watcher stopped");
       }
-      // --- Relationships ---
-      async createRelationship(rel) {
-        const id = randomUUID();
-        const ts = now();
-        this.db.prepare(`
-      INSERT INTO relationships (
-        id, type, source_entity_id, target_entity_id,
-        description, confidence, properties, extracted_by,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, rel.type, rel.sourceEntityId, rel.targetEntityId, rel.description ?? null, rel.confidence, JSON.stringify(rel.properties), JSON.stringify(rel.extractedBy), ts, ts);
-        return { ...rel, id, createdAt: ts, updatedAt: ts };
-      }
-      async getRelationship(id) {
-        const row = this.db.prepare("SELECT * FROM relationships WHERE id = ?").get(id);
-        return row ? rowToRelationship(row) : null;
-      }
-      async getRelationshipsForEntity(entityId, direction = "both", limit = 200) {
-        let sql;
-        let params;
-        if (direction === "out") {
-          sql = "SELECT * FROM relationships WHERE source_entity_id = ? LIMIT ?";
-          params = [entityId, limit];
-        } else if (direction === "in") {
-          sql = "SELECT * FROM relationships WHERE target_entity_id = ? LIMIT ?";
-          params = [entityId, limit];
-        } else {
-          sql = "SELECT * FROM relationships WHERE source_entity_id = ? OR target_entity_id = ? LIMIT ?";
-          params = [entityId, entityId, limit];
+      handleEvent(path, changeType) {
+        if (this.isExcluded(path))
+          return;
+        const ext = extname(path).slice(1).toLowerCase();
+        if (this.options.fileTypes.length > 0 && !this.options.fileTypes.includes(ext)) {
+          return;
         }
-        const rows = this.db.prepare(sql).all(...params);
-        return rows.map(rowToRelationship);
+        const existing = this.debounceTimers.get(path);
+        if (existing) {
+          clearTimeout(existing);
+        }
+        const timer = setTimeout(() => {
+          this.debounceTimers.delete(path);
+          eventBus.emit({
+            type: "file.changed",
+            payload: { path, changeType },
+            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+            source: "ingest:watcher"
+          });
+          if (this.handler) {
+            try {
+              this.handler(path, changeType);
+            } catch (err) {
+              logger.error("File change handler error", {
+                path,
+                error: err instanceof Error ? err.message : String(err)
+              });
+            }
+          }
+        }, this.options.debounceMs);
+        this.debounceTimers.set(path, timer);
       }
-      async getRelationshipsForEntities(entityIds) {
-        if (entityIds.length === 0)
-          return [];
-        const placeholders = entityIds.map(() => "?").join(",");
-        const sql = `
-      SELECT * FROM relationships
-      WHERE source_entity_id IN (${placeholders})
-         OR target_entity_id IN (${placeholders})
-      LIMIT 2000
-    `;
-        const rows = this.db.prepare(sql).all(...entityIds, ...entityIds);
-        return rows.map(rowToRelationship);
-      }
-      async deleteRelationship(id) {
-        this.db.prepare("DELETE FROM relationships WHERE id = ?").run(id);
-      }
-      /**
-       * Delete all entities (and their relationships + FTS entries) for a specific source file.
-       * Used during re-ingestion to replace stale entities atomically.
-       */
-      deleteEntitiesBySourceFile(sourceFile) {
-        return this.db.transaction(() => {
-          const relResult = this.db.prepare(`
-        DELETE FROM relationships
-        WHERE source_entity_id IN (SELECT id FROM entities WHERE source_file = ?)
-           OR target_entity_id IN (SELECT id FROM entities WHERE source_file = ?)
-      `).run(sourceFile, sourceFile);
-          this.db.prepare(`
-        DELETE FROM entities_fts
-        WHERE rowid IN (SELECT rowid FROM entities WHERE source_file = ? AND deleted_at IS NULL)
-      `).run(sourceFile);
-          this.db.prepare(`
-        DELETE FROM contradictions
-        WHERE entity_id_a IN (SELECT id FROM entities WHERE source_file = ?)
-           OR entity_id_b IN (SELECT id FROM entities WHERE source_file = ?)
-      `).run(sourceFile, sourceFile);
-          const entityResult = this.db.prepare("DELETE FROM entities WHERE source_file = ?").run(sourceFile);
-          return {
-            deletedEntities: entityResult.changes,
-            deletedRelationships: relResult.changes
-          };
-        })();
-      }
-      /**
-       * Atomically try to acquire a processing lock for a file path.
-       * Returns true if lock acquired (status set to 'processing'), false if already locked.
-       * Uses SQLite's atomic UPDATE to prevent races between concurrent processes.
-       * projectId is required for new files (foreign key constraint on files table).
-       */
-      tryAcquireFileLock(filePath, projectId) {
-        const result = this.db.prepare(`
-      UPDATE files SET status = 'processing'
-      WHERE path = ? AND status != 'processing'
-    `).run(filePath);
-        if (result.changes > 0)
-          return true;
-        const exists = this.db.prepare("SELECT 1 FROM files WHERE path = ?").get(filePath);
-        if (!exists) {
-          try {
-            this.db.prepare(`
-          INSERT INTO files (id, path, relative_path, project_id, content_hash, file_type, size_bytes, last_modified, status)
-          VALUES (?, ?, '', ?, '', '', 0, '', 'processing')
-        `).run(randomUUID(), filePath, projectId);
-            return true;
-          } catch {
-            return false;
+      isExcluded(filePath) {
+        const parts = filePath.split(/[\\/]/);
+        for (const compiled of this.compiledExcludePatterns) {
+          if (typeof compiled === "string") {
+            if (parts.some((p) => p === compiled))
+              return true;
+          } else {
+            if (parts.some((p) => compiled.pattern.test(p)))
+              return true;
           }
         }
         return false;
       }
-      /**
-       * Release a file processing lock (called after ingestion completes or fails).
-       * The upsertFile() call at the end of ingestion will set the final status.
-       */
-      releaseFileLock(filePath) {
-        this.db.prepare(`
-      UPDATE files SET status = 'pending'
-      WHERE path = ? AND status = 'processing'
-    `).run(filePath);
-      }
-      deleteBySourcePath(pathPrefix) {
-        const normalized = pathPrefix.replace(/\//g, "\\");
-        const escaped = normalized.replace(/[%_\\]/g, "\\$&");
-        const pattern = escaped + "%";
-        return this.db.transaction(() => {
-          const relResult = this.db.prepare(`
-        DELETE FROM relationships
-        WHERE source_entity_id IN (SELECT id FROM entities WHERE source_file LIKE ? ESCAPE '\\')
-           OR target_entity_id IN (SELECT id FROM entities WHERE source_file LIKE ? ESCAPE '\\')
-      `).run(pattern, pattern);
-          this.db.prepare(`
-        DELETE FROM entities_fts
-        WHERE rowid IN (SELECT rowid FROM entities WHERE source_file LIKE ? ESCAPE '\\' AND deleted_at IS NULL)
-      `).run(pattern);
-          const entityResult = this.db.prepare("DELETE FROM entities WHERE source_file LIKE ? ESCAPE '\\'").run(pattern);
-          const fileResult = this.db.prepare("DELETE FROM files WHERE path LIKE ? ESCAPE '\\'").run(pattern);
-          return {
-            deletedEntities: entityResult.changes,
-            deletedRelationships: relResult.changes,
-            deletedFiles: fileResult.changes
-          };
-        })();
-      }
-      resetDatabase() {
-        this.db.transaction(() => {
-          this.db.prepare("DELETE FROM contradictions").run();
-          this.db.prepare("DELETE FROM relationships").run();
-          this.db.prepare("DELETE FROM entities_fts").run();
-          this.db.prepare("DELETE FROM entities").run();
-          this.db.prepare("DELETE FROM files").run();
-        })();
-      }
-      pruneSoftDeleted() {
-        return this.db.transaction(() => {
-          const relResult = this.db.prepare(`
-        DELETE FROM relationships
-        WHERE source_entity_id IN (SELECT id FROM entities WHERE deleted_at IS NOT NULL)
-           OR target_entity_id IN (SELECT id FROM entities WHERE deleted_at IS NOT NULL)
-      `).run();
-          this.db.prepare(`
-        DELETE FROM entities_fts
-        WHERE rowid IN (SELECT rowid FROM entities WHERE deleted_at IS NOT NULL)
-      `).run();
-          const entityResult = this.db.prepare("DELETE FROM entities WHERE deleted_at IS NOT NULL").run();
-          return {
-            deletedEntities: entityResult.changes,
-            deletedRelationships: relResult.changes
-          };
-        })();
-      }
-      // --- Files ---
-      async upsertFile(file) {
-        const existing = this.db.prepare("SELECT * FROM files WHERE path = ?").get(file.path);
-        if (existing) {
-          this.db.prepare(`
-        UPDATE files SET
-          relative_path = ?, project_id = ?, content_hash = ?,
-          file_type = ?, size_bytes = ?, last_modified = ?,
-          last_ingested_at = ?, entity_ids = ?, status = ?, parse_error = ?
-        WHERE path = ?
-      `).run(file.relativePath, file.projectId, file.contentHash, file.fileType, file.sizeBytes, file.lastModified, file.lastIngestedAt ?? null, JSON.stringify(file.entityIds), file.status, file.parseError ?? null, file.path);
-          return { ...file, id: existing.id };
-        }
-        const id = randomUUID();
-        this.db.prepare(`
-      INSERT INTO files (
-        id, path, relative_path, project_id, content_hash,
-        file_type, size_bytes, last_modified, last_ingested_at,
-        entity_ids, status, parse_error
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, file.path, file.relativePath, file.projectId, file.contentHash, file.fileType, file.sizeBytes, file.lastModified, file.lastIngestedAt ?? null, JSON.stringify(file.entityIds), file.status, file.parseError ?? null);
-        return { ...file, id };
-      }
-      /**
-       * Check if a file has already been ingested with the given content hash.
-       * Synchronous for use in cost estimation without async overhead.
-       */
-      isFileCached(filePath, contentHash) {
-        const row = this.db.prepare("SELECT 1 FROM files WHERE path = ? AND content_hash = ? AND status = 'ingested'").get(filePath, contentHash);
-        return !!row;
-      }
-      async getFile(path) {
-        const row = this.db.prepare("SELECT * FROM files WHERE path = ?").get(path);
-        return row ? rowToFile(row) : null;
-      }
-      async getFilesByProject(projectId) {
-        const rows = this.db.prepare("SELECT * FROM files WHERE project_id = ?").all(projectId);
-        return rows.map(rowToFile);
-      }
-      async getRecentFiles(sinceDays = 7, limit = 20) {
-        const since = new Date(Date.now() - sinceDays * 864e5).toISOString();
-        const rows = this.db.prepare(`SELECT * FROM files
-       WHERE status = 'ingested' AND last_ingested_at >= ?
-       ORDER BY last_ingested_at DESC LIMIT ?`).all(since, limit);
-        return rows.map(rowToFile);
-      }
-      // --- Projects ---
-      async createProject(project) {
-        const id = randomUUID();
-        const ts = now();
-        this.db.prepare(`
-      INSERT INTO projects (
-        id, name, root_path, privacy_level,
-        file_count, entity_count, last_ingested_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, project.name, project.rootPath, project.privacyLevel, project.fileCount, project.entityCount, project.lastIngestedAt ?? null, ts);
-        return { ...project, id, createdAt: ts };
-      }
-      async getProject(id) {
-        const row = this.db.prepare(`SELECT p.*,
-        (SELECT COUNT(*) FROM files WHERE project_id = p.id) AS live_file_count,
-        (SELECT COUNT(*) FROM entities WHERE project_id = p.id AND deleted_at IS NULL AND status != 'deleted') AS live_entity_count
-      FROM projects p WHERE p.id = ?`).get(id);
-        if (!row)
-          return null;
-        return {
-          ...rowToProject(row),
-          fileCount: row.live_file_count,
-          entityCount: row.live_entity_count
-        };
-      }
-      async listProjects() {
-        const rows = this.db.prepare(`SELECT p.*,
-        (SELECT COUNT(*) FROM files WHERE project_id = p.id) AS live_file_count,
-        (SELECT COUNT(*) FROM entities WHERE project_id = p.id AND deleted_at IS NULL AND status != 'deleted') AS live_entity_count
-      FROM projects p ORDER BY p.created_at DESC`).all();
-        return rows.map((row) => ({
-          ...rowToProject(row),
-          fileCount: row.live_file_count,
-          entityCount: row.live_entity_count
-        }));
-      }
-      async getProjectByName(name) {
-        const row = this.db.prepare(`SELECT p.*,
-        (SELECT COUNT(*) FROM files WHERE project_id = p.id) AS live_file_count,
-        (SELECT COUNT(*) FROM entities WHERE project_id = p.id AND deleted_at IS NULL AND status != 'deleted') AS live_entity_count
-      FROM projects p WHERE p.name = ?`).get(name);
-        if (!row)
-          return null;
-        return {
-          ...rowToProject(row),
-          fileCount: row.live_file_count,
-          entityCount: row.live_entity_count
-        };
-      }
-      async deleteProject(id) {
-        const result = this.db.prepare("DELETE FROM projects WHERE id = ?").run(id);
-        return result.changes > 0;
-      }
-      // --- Contradictions ---
-      async createContradiction(contradiction) {
-        const id = randomUUID();
-        this.db.prepare(`
-      INSERT INTO contradictions (
-        id, entity_id_a, entity_id_b, description, severity,
-        suggested_resolution, status, resolved_action, resolved_at, detected_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, contradiction.entityIds[0], contradiction.entityIds[1], contradiction.description, contradiction.severity, contradiction.suggestedResolution ?? null, contradiction.status, contradiction.resolvedAction ?? null, contradiction.resolvedAt ?? null, contradiction.detectedAt);
-        return { ...contradiction, id };
-      }
-      async findContradictions(query = {}) {
-        const conditions = [];
-        const params = [];
-        if (query.status) {
-          conditions.push("status = ?");
-          params.push(query.status);
-        }
-        if (query.entityId) {
-          conditions.push("(entity_id_a = ? OR entity_id_b = ?)");
-          params.push(query.entityId, query.entityId);
-        }
-        const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-        let sql = `SELECT * FROM contradictions ${where} ORDER BY detected_at DESC`;
-        if (query.limit) {
-          sql += " LIMIT ?";
-          params.push(query.limit);
-        }
-        const rows = this.db.prepare(sql).all(...params);
-        return rows.map(rowToContradiction);
-      }
-      async updateContradiction(id, update) {
-        this.db.prepare(`
-      UPDATE contradictions SET status = ?, resolved_action = ?, resolved_at = ? WHERE id = ?
-    `).run(update.status, update.resolvedAction ?? null, update.resolvedAt ?? null, id);
-      }
-      // --- Search ---
-      async searchEntities(text, limit = 20) {
-        const sanitized = text.replace(/[^a-zA-Z0-9\s]/g, " ").trim();
-        if (!sanitized)
-          return [];
-        const rows = this.db.prepare(`
-      SELECT e.* FROM entities e
-      JOIN entities_fts fts ON fts.rowid = e.rowid
-      WHERE fts.entities_fts MATCH ? AND e.deleted_at IS NULL
-      ORDER BY rank
-      LIMIT ?
-    `).all(sanitized, limit);
-        return rows.map(rowToEntity);
-      }
-      async semanticSearch(_embedding, _limit = 20) {
-        return [];
-      }
-      // --- Stats ---
-      async getStats() {
-        const entityCount = this.db.prepare("SELECT COUNT(*) as count FROM entities WHERE deleted_at IS NULL AND status != 'deleted'").get().count;
-        const relationshipCount = this.db.prepare("SELECT COUNT(*) as count FROM relationships").get().count;
-        const fileCount = this.db.prepare("SELECT COUNT(*) as count FROM files").get().count;
-        const projectCount = this.db.prepare("SELECT COUNT(*) as count FROM projects").get().count;
-        const contradictionCount = this.db.prepare("SELECT COUNT(*) as count FROM contradictions WHERE status = 'active'").get().count;
-        let dbSizeBytes = 0;
-        try {
-          dbSizeBytes = statSync(this.dbPath).size;
-        } catch {
-        }
-        return {
-          entityCount,
-          relationshipCount,
-          fileCount,
-          projectCount,
-          contradictionCount,
-          dbSizeBytes,
-          vectorDbSizeBytes: 0
-          // Managed by VectorStore
-        };
-      }
-      // --- Report ---
-      getReportData() {
-        const fileRows = this.db.prepare("SELECT status, COUNT(*) as count FROM files GROUP BY status").all();
-        const fileStatus = { ingested: 0, failed: 0, skipped: 0, pending: 0 };
-        for (const row of fileRows) {
-          if (row.status in fileStatus) {
-            fileStatus[row.status] = row.count;
+      buildIgnorePatterns() {
+        const patterns = [];
+        for (const pattern of this.options.exclude) {
+          if (pattern.includes("*")) {
+            patterns.push(globToRegex(pattern));
+          } else if (pattern.includes(".")) {
+            patterns.push(new RegExp(`(^|[\\\\/])${escapeRegex(pattern)}$`));
+          } else {
+            patterns.push(new RegExp(`(^|[\\\\/])${escapeRegex(pattern)}([\\\\/]|$)`));
           }
         }
-        const failedFiles = this.db.prepare(`SELECT path, relative_path, parse_error FROM files
-       WHERE status = 'failed' AND parse_error IS NOT NULL
-       ORDER BY path LIMIT 50`).all().map((r) => ({ path: r.path, relativePath: r.relative_path, parseError: r.parse_error }));
-        const entityRows = this.db.prepare(`SELECT type, COUNT(*) as count, AVG(confidence) as avg_confidence
-       FROM entities WHERE deleted_at IS NULL AND status = 'active'
-       GROUP BY type ORDER BY count DESC`).all();
-        const entityBreakdown = entityRows.map((r) => ({
-          type: r.type,
-          count: r.count,
-          avgConfidence: r.avg_confidence
-        }));
-        const supersededCount = this.db.prepare("SELECT COUNT(*) as count FROM entities WHERE status = 'superseded'").get().count;
-        const relRows = this.db.prepare("SELECT type, COUNT(*) as count FROM relationships GROUP BY type ORDER BY count DESC").all();
-        const relationshipBreakdown = relRows.map((r) => ({ type: r.type, count: r.count }));
-        const contrRows = this.db.prepare("SELECT status, severity, COUNT(*) as count FROM contradictions GROUP BY status, severity").all();
-        const contradictions = {
-          active: 0,
-          resolved: 0,
-          dismissed: 0,
-          highSeverity: 0,
-          mediumSeverity: 0,
-          lowSeverity: 0
-        };
-        for (const r of contrRows) {
-          if (r.status === "active")
-            contradictions.active += r.count;
-          if (r.status === "resolved")
-            contradictions.resolved += r.count;
-          if (r.status === "dismissed")
-            contradictions.dismissed += r.count;
-          if (r.severity === "high" || r.severity === "critical")
-            contradictions.highSeverity += r.count;
-          if (r.severity === "medium")
-            contradictions.mediumSeverity += r.count;
-          if (r.severity === "low")
-            contradictions.lowSeverity += r.count;
-        }
-        const topContrRows = this.db.prepare(`SELECT c.id, c.severity, c.description, ea.name as entity_a, eb.name as entity_b
-       FROM contradictions c
-       LEFT JOIN entities ea ON c.entity_id_a = ea.id
-       LEFT JOIN entities eb ON c.entity_id_b = eb.id
-       WHERE c.status = 'active'
-       ORDER BY CASE c.severity
-         WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3
-       END, c.detected_at DESC
-       LIMIT 10`).all();
-        const topContradictions = topContrRows.map((r) => ({
-          id: r.id.slice(0, 8),
-          severity: r.severity,
-          description: r.description,
-          entityA: r.entity_a ?? "unknown",
-          entityB: r.entity_b ?? "unknown"
-        }));
-        const tokenRow = this.db.prepare(`SELECT
-        SUM(CAST(JSON_EXTRACT(extracted_by, '$.tokensUsed.input') AS INTEGER)) as total_input,
-        SUM(CAST(JSON_EXTRACT(extracted_by, '$.tokensUsed.output') AS INTEGER)) as total_output
-       FROM entities WHERE deleted_at IS NULL`).get();
-        return {
-          generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-          fileStatus,
-          failedFiles,
-          entityBreakdown,
-          supersededCount,
-          relationshipBreakdown,
-          contradictions,
-          topContradictions,
-          tokenEstimate: {
-            totalInput: tokenRow.total_input ?? 0,
-            totalOutput: tokenRow.total_output ?? 0
-          }
-        };
-      }
-      // --- Maintenance ---
-      async backup() {
-        const backupPath = `${this.dbPath}.backup-${Date.now()}`;
-        await this.db.backup(backupPath);
-        try {
-          chmodSync(backupPath, 384);
-        } catch {
-        }
-        return backupPath;
-      }
-      async integrityCheck() {
-        const details = [];
-        const orphanedRels = this.db.prepare(`
-      SELECT COUNT(*) as count FROM relationships r
-      WHERE NOT EXISTS (SELECT 1 FROM entities WHERE id = r.source_entity_id)
-         OR NOT EXISTS (SELECT 1 FROM entities WHERE id = r.target_entity_id)
-    `).get().count;
-        if (orphanedRels > 0) {
-          details.push(`Found ${orphanedRels} orphaned relationships`);
-        }
-        const missingProjects = this.db.prepare(`
-      SELECT COUNT(*) as count FROM files f
-      WHERE NOT EXISTS (SELECT 1 FROM projects WHERE id = f.project_id)
-    `).get().count;
-        if (missingProjects > 0) {
-          details.push(`Found ${missingProjects} files referencing missing projects`);
-        }
-        const integrityResult = this.db.pragma("integrity_check");
-        const sqliteOk = integrityResult.length === 1 && integrityResult[0].integrity_check === "ok";
-        if (!sqliteOk) {
-          details.push("SQLite integrity check failed");
-        }
-        return {
-          ok: orphanedRels === 0 && missingProjects === 0 && sqliteOk,
-          orphanedRelationships: orphanedRels,
-          missingFiles: missingProjects,
-          details
-        };
-      }
-      // --- Token Usage ---
-      insertTokenUsage(record) {
-        this.db.prepare(`
-      INSERT OR IGNORE INTO token_usage (id, request_id, task, provider, model, input_tokens, output_tokens, estimated_cost_usd, latency_ms, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(record.id, record.requestId, record.task, record.provider, record.model, record.inputTokens, record.outputTokens, record.estimatedCostUsd, record.latencyMs, record.timestamp);
-      }
-      getTokenUsage(since) {
-        if (since) {
-          return this.db.prepare("SELECT * FROM token_usage WHERE timestamp >= ? ORDER BY timestamp DESC").all(since);
-        }
-        return this.db.prepare("SELECT * FROM token_usage ORDER BY timestamp DESC").all();
-      }
-      getTokenUsageSummary(since) {
-        const whereClause = since ? "WHERE timestamp >= ?" : "";
-        const params = since ? [since] : [];
-        const row = this.db.prepare(`SELECT COALESCE(SUM(estimated_cost_usd), 0) as cost, COALESCE(SUM(input_tokens), 0) as input, COALESCE(SUM(output_tokens), 0) as output, COUNT(*) as count FROM token_usage ${whereClause}`).get(...params);
-        return { totalCostUsd: row.cost, totalInputTokens: row.input, totalOutputTokens: row.output, requestCount: row.count };
-      }
-      // --- Graph visualization data ---
-      getGraphData(options = {}) {
-        const limit = options.limit ?? 2e3;
-        let entitySql = `SELECT id, name, type, confidence, source_file FROM entities WHERE status = 'active'`;
-        const params = [];
-        if (options.projectId) {
-          entitySql += ` AND project_id = ?`;
-          params.push(options.projectId);
-        }
-        entitySql += ` ORDER BY confidence DESC LIMIT ?`;
-        params.push(limit);
-        const entityRows = this.db.prepare(entitySql).all(...params);
-        const entityIds = new Set(entityRows.map((e) => e.id));
-        const relRows = this.db.prepare(`SELECT id, type, source_entity_id, target_entity_id, confidence
-       FROM relationships
-       LIMIT ?`).all(limit * 2);
-        const edges = relRows.filter((r) => entityIds.has(r.source_entity_id) && entityIds.has(r.target_entity_id)).map((r) => ({
-          id: r.id,
-          source: r.source_entity_id,
-          target: r.target_entity_id,
-          type: r.type,
-          confidence: r.confidence
-        }));
-        return {
-          nodes: entityRows.map((e) => ({
-            id: e.id,
-            name: e.name,
-            type: e.type,
-            confidence: e.confidence,
-            sourceFile: e.source_file
-          })),
-          edges
-        };
+        return patterns;
       }
     };
-  }
-});
-
-// packages/graph/dist/vector-store.js
-import { connect } from "@lancedb/lancedb";
-import { mkdirSync as mkdirSync4 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-function resolveHomePath2(p) {
-  return p.startsWith("~") ? p.replace("~", homedir5()) : p;
-}
-var logger, TABLE_NAME, VectorStore;
-var init_vector_store = __esm({
-  "packages/graph/dist/vector-store.js"() {
-    "use strict";
-    init_dist();
-    logger = createLogger("graph:vector-store");
-    TABLE_NAME = "entity_embeddings";
-    VectorStore = class {
-      db = null;
-      table = null;
-      dbPath;
-      dimensions;
-      constructor(options = {}) {
-        this.dbPath = resolveHomePath2(options.dbPath ?? "~/.cortex/vector.lance");
-        this.dimensions = options.dimensions ?? 384;
-      }
-      async initialize() {
-        mkdirSync4(this.dbPath, { recursive: true });
-        this.db = await connect(this.dbPath);
-        try {
-          this.table = await this.db.openTable(TABLE_NAME);
-        } catch {
-          logger.debug("Vector table does not exist yet, will create on first add");
-        }
-      }
-      async ensureTable() {
-        if (this.table)
-          return this.table;
-        if (!this.db)
-          throw new Error("VectorStore not initialized");
-        this.table = await this.db.createTable(TABLE_NAME, [
-          {
-            id: "_init",
-            entityId: "_init",
-            vector: new Array(this.dimensions).fill(0),
-            text: ""
-          }
-        ]);
-        await this.table.delete('id = "_init"');
-        return this.table;
-      }
-      async addVectors(records) {
-        if (records.length === 0)
-          return;
-        const table = await this.ensureTable();
-        const rows = records.map((r) => ({
-          id: r.entityId,
-          entityId: r.entityId,
-          vector: Array.from(r.vector),
-          text: r.text
-        }));
-        await table.add(rows);
-        logger.debug(`Added ${rows.length} vectors`);
-      }
-      async search(queryVector, limit = 20) {
-        if (!this.table)
-          return [];
-        const results = await this.table.search(Array.from(queryVector)).limit(limit).toArray();
-        return results.map((r) => ({
-          entityId: r.entityId,
-          distance: r._distance,
-          text: r.text
-        }));
-      }
-      async deleteByEntityId(entityId) {
-        if (!this.table)
-          return;
-        await this.table.delete(`entityId = "${entityId}"`);
-      }
-      async count() {
-        if (!this.table)
-          return 0;
-        return await this.table.countRows();
-      }
-    };
-  }
-});
-
-// packages/graph/dist/query-engine.js
-function estimateTokens(text) {
-  return Math.ceil(text.length / AVG_CHARS_PER_TOKEN);
-}
-var logger2, AVG_CHARS_PER_TOKEN, FTS_STOP_WORDS, QueryEngine;
-var init_query_engine = __esm({
-  "packages/graph/dist/query-engine.js"() {
-    "use strict";
-    init_dist();
-    logger2 = createLogger("graph:query-engine");
-    AVG_CHARS_PER_TOKEN = 4;
-    FTS_STOP_WORDS = /* @__PURE__ */ new Set([
-      "a",
-      "an",
-      "the",
-      "and",
-      "or",
-      "but",
-      "in",
-      "on",
-      "at",
-      "to",
-      "for",
-      "of",
-      "with",
-      "by",
-      "from",
-      "is",
-      "are",
-      "was",
-      "were",
-      "be",
-      "been",
-      "being",
-      "have",
-      "has",
-      "had",
-      "do",
-      "does",
-      "did",
-      "will",
-      "would",
-      "could",
-      "should",
-      "may",
-      "might",
-      "shall",
-      "can",
-      "need",
-      "must",
-      "what",
-      "which",
-      "who",
-      "how",
-      "why",
-      "when",
-      "where",
-      "that",
-      "this",
-      "these",
-      "those",
-      "it",
-      "its",
-      "me",
-      "my",
-      "you",
-      "your",
-      "we",
-      "our",
-      "they",
-      "their",
-      "he",
-      "she",
-      "i",
-      "all",
-      "any",
-      "each",
-      "some",
-      "no",
-      "not",
-      "so",
-      "yet",
-      "use",
-      "used",
-      "using",
-      "about",
-      "tell",
-      "know",
-      "get",
-      "got",
-      "make",
-      "made",
-      "see",
-      "give",
-      "go",
-      "come",
-      "take"
-    ]);
-    QueryEngine = class {
-      sqliteStore;
-      vectorStore;
-      maxContextTokens;
-      maxResultEntities;
-      ftsWeight;
-      vectorWeight;
-      constructor(sqliteStore, vectorStore, options = {}) {
-        this.sqliteStore = sqliteStore;
-        this.vectorStore = vectorStore;
-        this.maxContextTokens = options.maxContextTokens ?? 5e4;
-        this.maxResultEntities = options.maxResultEntities ?? 30;
-        this.ftsWeight = options.ftsWeight ?? 0.4;
-        this.vectorWeight = options.vectorWeight ?? 0.6;
-      }
-      async assembleContext(query, queryEmbedding, projectId) {
-        const [ftsResults, vectorResults] = await Promise.all([
-          this.ftsSearch(query, projectId),
-          queryEmbedding ? this.vectorStore.search(queryEmbedding, 30) : Promise.resolve([])
-        ]);
-        const rankedEntities = this.mergeAndRank(ftsResults, vectorResults);
-        const contextEntities = [];
-        let totalTokens = 0;
-        const budgetForEntities = Math.floor(this.maxContextTokens * 0.7);
-        for (const entity of rankedEntities) {
-          if (contextEntities.length >= this.maxResultEntities)
-            break;
-          const entityTokens = estimateTokens(entity.content) + estimateTokens(entity.name);
-          if (totalTokens + entityTokens > budgetForEntities)
-            break;
-          contextEntities.push(entity);
-          totalTokens += entityTokens;
-        }
-        const privacyFiltered = await this.filterByPrivacy(contextEntities);
-        const entityIds = new Set(privacyFiltered.map((e) => e.id));
-        const allRels = await this.sqliteStore.getRelationshipsForEntities([...entityIds]);
-        const uniqueRels = allRels.filter((r) => entityIds.has(r.sourceEntityId) && entityIds.has(r.targetEntityId));
-        const relTokens = uniqueRels.reduce((sum, r) => sum + estimateTokens(r.description ?? "") + 20, 0);
-        const filteredTokens = privacyFiltered.reduce((sum, e) => sum + estimateTokens(e.content) + estimateTokens(e.name), 0);
-        logger2.debug("Context assembled", {
-          entities: privacyFiltered.length,
-          entitiesFiltered: contextEntities.length - privacyFiltered.length,
-          relationships: uniqueRels.length,
-          totalTokensEstimate: filteredTokens + relTokens
-        });
-        return {
-          entities: privacyFiltered,
-          relationships: uniqueRels,
-          totalTokensEstimate: filteredTokens + relTokens
-        };
-      }
-      async filterByPrivacy(entities) {
-        if (entities.length === 0)
-          return entities;
-        const projectIds = [...new Set(entities.map((e) => e.projectId))];
-        const projectPrivacy = /* @__PURE__ */ new Map();
-        for (const pid of projectIds) {
-          const project = await this.sqliteStore.getProject(pid);
-          if (project) {
-            projectPrivacy.set(pid, project.privacyLevel);
-          }
-        }
-        const filtered = [];
-        let excluded = 0;
-        let redacted = 0;
-        for (const entity of entities) {
-          const level = projectPrivacy.get(entity.projectId) ?? "standard";
-          if (level === "restricted") {
-            excluded++;
-            continue;
-          }
-          if (level === "sensitive") {
-            redacted++;
-            filtered.push({ ...entity, content: "[REDACTED]", properties: {} });
-            continue;
-          }
-          filtered.push(entity);
-        }
-        if (excluded > 0 || redacted > 0) {
-          logger2.info("Privacy filter applied", { excluded, redacted, kept: filtered.length });
-        }
-        return filtered;
-      }
-      /**
-       * Converts a natural language query to an FTS5-safe keyword query.
-       * FTS5 uses AND semantics by default, so "what is the architecture" would
-       * require ALL words to match. We strip stop words and use OR semantics so
-       * entities matching ANY meaningful keyword are returned.
-       */
-      buildFtsQuery(query) {
-        const keywords = (query ?? "").replace(/[^a-zA-Z0-9\s]/g, " ").toLowerCase().split(/\s+/).filter((w) => w.length >= 3 && !FTS_STOP_WORDS.has(w));
-        if (keywords.length === 0) {
-          return query.replace(/[^a-zA-Z0-9\s]/g, " ").trim();
-        }
-        return keywords.join(" OR ");
-      }
-      async ftsSearch(query, projectId) {
-        const ftsQuery = this.buildFtsQuery(query);
-        try {
-          if (projectId) {
-            return await this.sqliteStore.findEntities({
-              search: ftsQuery,
-              projectId,
-              limit: 30
-            });
-          }
-          return await this.sqliteStore.searchEntities(ftsQuery, 30);
-        } catch (err) {
-          logger2.warn("FTS search failed, returning empty results", {
-            error: err instanceof Error ? err.message : String(err),
-            query: ftsQuery
-          });
-          return [];
-        }
-      }
-      mergeAndRank(ftsResults, vectorResults) {
-        const scores = /* @__PURE__ */ new Map();
-        for (let i = 0; i < ftsResults.length; i++) {
-          const entity = ftsResults[i];
-          const positionScore = 1 - i / Math.max(ftsResults.length, 1);
-          scores.set(entity.id, {
-            entity,
-            score: positionScore * this.ftsWeight
-          });
-        }
-        if (vectorResults.length > 0) {
-          const maxDist = Math.max(...vectorResults.map((r) => r.distance), 1);
-          for (const vr of vectorResults) {
-            const distScore = 1 - vr.distance / maxDist;
-            const existing = scores.get(vr.entityId);
-            if (existing) {
-              existing.score += distScore * this.vectorWeight;
-            }
-          }
-        }
-        return [...scores.values()].sort((a, b) => b.score - a.score).map((s) => s.entity);
-      }
-    };
-  }
-});
-
-// packages/graph/dist/index.js
-var init_dist2 = __esm({
-  "packages/graph/dist/index.js"() {
-    "use strict";
-    init_sqlite_store();
-    init_vector_store();
-    init_query_engine();
   }
 });
 
 // packages/llm/dist/providers/anthropic.js
 import Anthropic from "@anthropic-ai/sdk";
-var logger3, AnthropicProvider;
+var logger2, AnthropicProvider;
 var init_anthropic = __esm({
   "packages/llm/dist/providers/anthropic.js"() {
     "use strict";
     init_dist();
-    logger3 = createLogger("llm:anthropic");
+    logger2 = createLogger("llm:anthropic");
     AnthropicProvider = class {
       name = "anthropic";
       type = "cloud";
@@ -2027,15 +1820,15 @@ function validateOllamaHost(host) {
   }
   const localhostNames = /* @__PURE__ */ new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
   if (!localhostNames.has(hostname)) {
-    logger4.warn(`Ollama host is not localhost (${hostname}). Ensure the remote Ollama instance is trusted and network-secured.`);
+    logger3.warn(`Ollama host is not localhost (${hostname}). Ensure the remote Ollama instance is trusted and network-secured.`);
   }
 }
-var logger4, BLOCKED_HOST_PATTERNS, OllamaProvider;
+var logger3, BLOCKED_HOST_PATTERNS, OllamaProvider;
 var init_ollama = __esm({
   "packages/llm/dist/providers/ollama.js"() {
     "use strict";
     init_dist();
-    logger4 = createLogger("llm:ollama");
+    logger3 = createLogger("llm:ollama");
     BLOCKED_HOST_PATTERNS = [
       /^169\.254\./,
       // AWS/Azure metadata link-local
@@ -2125,7 +1918,7 @@ var init_ollama = __esm({
           const result = await response.json();
           const inputTokens = result.prompt_eval_count ?? 0;
           const outputTokens = result.eval_count ?? 0;
-          logger4.debug("Ollama completion", {
+          logger3.debug("Ollama completion", {
             model: this.model,
             inputTokens,
             outputTokens,
@@ -2254,7 +2047,7 @@ var init_ollama = __esm({
             throw new Error(`Ollama embed API error (${response.status}): ${errorText}`);
           }
           const result = await response.json();
-          logger4.debug("Ollama embeddings", {
+          logger3.debug("Ollama embeddings", {
             model: this.embeddingModel,
             count: texts.length,
             dimensions: result.embeddings[0]?.length
@@ -2279,7 +2072,7 @@ var init_ollama = __esm({
           const result = await response.json();
           const hasModel = result.models.some((m) => m.name === this.model || m.model === this.model);
           if (!hasModel) {
-            logger4.warn("Ollama model not found", { model: this.model, available: result.models.map((m) => m.name) });
+            logger3.warn("Ollama model not found", { model: this.model, available: result.models.map((m) => m.name) });
           }
           return true;
         } catch {
@@ -2295,7 +2088,7 @@ var init_ollama = __esm({
         const result = await response.json();
         const hasModel = result.models.some((m) => m.name === this.model || m.model === this.model);
         if (!hasModel) {
-          logger4.info("Pulling Ollama model", { model: this.model });
+          logger3.info("Pulling Ollama model", { model: this.model });
           throw new CortexError(LLM_PROVIDER_UNAVAILABLE, "high", "llm", `Ollama model "${this.model}" is not installed.`, { model: this.model }, `Run: ollama pull ${this.model}`, false);
         }
       }
@@ -2347,12 +2140,12 @@ var init_ollama = __esm({
 
 // packages/llm/dist/providers/openai-compatible.js
 import OpenAI from "openai";
-var logger5, OpenAICompatibleProvider;
+var logger4, OpenAICompatibleProvider;
 var init_openai_compatible = __esm({
   "packages/llm/dist/providers/openai-compatible.js"() {
     "use strict";
     init_dist();
-    logger5 = createLogger("llm:openai-compatible");
+    logger4 = createLogger("llm:openai-compatible");
     OpenAICompatibleProvider = class {
       name = "openai-compatible";
       type = "cloud";
@@ -2394,7 +2187,7 @@ var init_openai_compatible = __esm({
         } catch {
           this.isGemini = false;
         }
-        logger5.info("OpenAI-compatible provider initialized", {
+        logger4.info("OpenAI-compatible provider initialized", {
           baseUrl: options.baseUrl,
           primaryModel: this.primaryModel,
           fastModel: this.fastModel
@@ -2505,7 +2298,7 @@ var init_openai_compatible = __esm({
         }
         if (err instanceof OpenAI.APIError) {
           const body = typeof err.error === "object" ? JSON.stringify(err.error) : String(err.error ?? "");
-          logger5.debug("API error details", { status: err.status, body, headers: err.headers });
+          logger4.debug("API error details", { status: err.status, body, headers: err.headers });
           return new CortexError(LLM_PROVIDER_UNAVAILABLE, "high", "llm", `OpenAI-compatible API error: ${err.status} ${err.message}${body ? ` \u2014 ${body}` : ""}`, { status: err.status }, "Retry or check your provider status page.", true, err.status);
         }
         const message = err instanceof Error ? err.message : String(err);
@@ -2516,21 +2309,44 @@ var init_openai_compatible = __esm({
 });
 
 // packages/llm/dist/token-tracker.js
-function estimateCost(model, inputTokens, outputTokens) {
-  const costs = MODEL_COSTS[model] ?? DEFAULT_COST;
+function estimateCost(model, inputTokens, outputTokens, provider) {
+  const costs = MODEL_COSTS[model];
+  if (!costs) {
+    const fallback = provider === "openai-compatible" ? OPENAI_COMPATIBLE_DEFAULT_COST : DEFAULT_COST;
+    logger5.warn("Unknown model for cost estimation \u2014 using fallback rates", {
+      model,
+      provider: provider ?? "unknown",
+      fallbackInputPerM: fallback.input,
+      fallbackOutputPerM: fallback.output
+    });
+    return inputTokens / 1e6 * fallback.input + outputTokens / 1e6 * fallback.output;
+  }
   return inputTokens / 1e6 * costs.input + outputTokens / 1e6 * costs.output;
 }
-var logger6, MODEL_COSTS, DEFAULT_COST, MAX_IN_MEMORY_RECORDS, TokenTracker;
+var logger5, MODEL_COSTS, DEFAULT_COST, OPENAI_COMPATIBLE_DEFAULT_COST, MAX_IN_MEMORY_RECORDS, TokenTracker;
 var init_token_tracker = __esm({
   "packages/llm/dist/token-tracker.js"() {
     "use strict";
     init_dist();
-    logger6 = createLogger("llm:token-tracker");
+    logger5 = createLogger("llm:token-tracker");
     MODEL_COSTS = {
       "claude-sonnet-4-5-20250929": { input: 3, output: 15 },
-      "claude-haiku-4-5-20251001": { input: 0.8, output: 4 }
+      "claude-haiku-4-5-20251001": { input: 0.8, output: 4 },
+      // DeepSeek V4 Flash (deepseek-chat / deepseek-reasoner aliases) — api-docs.deepseek.com
+      "deepseek-chat": { input: 0.14, output: 0.28 },
+      "deepseek-reasoner": { input: 0.14, output: 0.28 },
+      "deepseek-v4-flash": { input: 0.14, output: 0.28 },
+      // Google Gemini (generativelanguage.googleapis.com pricing)
+      "gemini-2.5-flash": { input: 0.15, output: 0.6 },
+      "gemini-2.0-flash": { input: 0.1, output: 0.4 },
+      "google/gemini-2.0-flash-001": { input: 0.1, output: 0.4 },
+      "google/gemini-2.0-flash-lite-001": { input: 0.075, output: 0.3 },
+      // Groq (groq.com/pricing)
+      "llama-3.3-70b-versatile": { input: 0.59, output: 0.79 },
+      "llama-3.1-8b-instant": { input: 0.05, output: 0.08 }
     };
     DEFAULT_COST = { input: 3, output: 15 };
+    OPENAI_COMPATIBLE_DEFAULT_COST = { input: 0.14, output: 0.28 };
     MAX_IN_MEMORY_RECORDS = 1e4;
     TokenTracker = class {
       records = [];
@@ -2556,7 +2372,7 @@ var init_token_tracker = __esm({
         this.checkBudget();
       }
       record(requestId, task, provider, model, inputTokens, outputTokens, latencyMs) {
-        const costUsd = estimateCost(model, inputTokens, outputTokens);
+        const costUsd = estimateCost(model, inputTokens, outputTokens, provider);
         const record = {
           id: crypto.randomUUID(),
           requestId,
@@ -2601,7 +2417,7 @@ var init_token_tracker = __esm({
           if (usedPercent >= threshold && !this.warningsFired.has(threshold)) {
             this.warningsFired.add(threshold);
             const remaining = this.monthlyBudgetUsd - spent;
-            logger6.warn(`Budget warning: ${(usedPercent * 100).toFixed(1)}% used`, {
+            logger5.warn(`Budget warning: ${(usedPercent * 100).toFixed(1)}% used`, {
               spent,
               budget: this.monthlyBudgetUsd,
               remaining
@@ -2616,7 +2432,7 @@ var init_token_tracker = __esm({
         }
         if (this.monthlyBudgetUsd > 0 && usedPercent >= 1 && !this.warningsFired.has(1)) {
           this.warningsFired.add(1);
-          logger6.warn("Budget exhausted", { spent, budget: this.monthlyBudgetUsd });
+          logger5.warn("Budget exhausted", { spent, budget: this.monthlyBudgetUsd });
           eventBus.emit({
             type: "budget.exhausted",
             payload: { totalSpentUsd: spent },
@@ -2669,12 +2485,12 @@ var init_token_tracker = __esm({
 
 // packages/llm/dist/cache.js
 import { createHash } from "node:crypto";
-var logger7, ResponseCache;
+var logger6, ResponseCache;
 var init_cache = __esm({
   "packages/llm/dist/cache.js"() {
     "use strict";
     init_dist();
-    logger7 = createLogger("llm:cache");
+    logger6 = createLogger("llm:cache");
     ResponseCache = class {
       cache = /* @__PURE__ */ new Map();
       enabled;
@@ -2699,7 +2515,7 @@ var init_cache = __esm({
           this.cache.delete(key);
           return null;
         }
-        logger7.debug("Cache hit", { promptId, promptVersion });
+        logger6.debug("Cache hit", { promptId, promptVersion });
         return entry;
       }
       set(contentHash, promptId, promptVersion, response, model, inputTokens, outputTokens) {
@@ -2912,12 +2728,12 @@ function resolveApiKeySource(source) {
     return process.env[source.slice(4)];
   }
   if (source && !source.startsWith("keychain:") && !source.startsWith("file:")) {
-    logger8.warn('apiKeySource appears to be a raw key. Use "env:VAR_NAME" format instead. Raw keys in config files are a security risk.');
+    logger7.warn('apiKeySource appears to be a raw key. Use "env:VAR_NAME" format instead. Raw keys in config files are a security risk.');
     return source;
   }
   return void 0;
 }
-var logger8, Router;
+var logger7, Router;
 var init_router = __esm({
   "packages/llm/dist/router.js"() {
     "use strict";
@@ -2928,7 +2744,7 @@ var init_router = __esm({
     init_token_tracker();
     init_cache();
     init_output_parser();
-    logger8 = createLogger("llm:router");
+    logger7 = createLogger("llm:router");
     Router = class _Router {
       cloudProvider = null;
       localProvider = null;
@@ -2950,7 +2766,7 @@ var init_router = __esm({
             if (config9.llm.cloud.provider === "openai-compatible") {
               const baseUrl = config9.llm.cloud.baseUrl;
               if (!baseUrl) {
-                logger8.warn("openai-compatible provider requires llm.cloud.baseUrl \u2014 skipping cloud");
+                logger7.warn("openai-compatible provider requires llm.cloud.baseUrl \u2014 skipping cloud");
               } else {
                 this.cloudProvider = new OpenAICompatibleProvider({
                   baseUrl,
@@ -2975,7 +2791,7 @@ var init_router = __esm({
             if (this.mode === "cloud-first") {
               throw err;
             }
-            logger8.warn("Cloud provider unavailable, falling back to local-only", {
+            logger7.warn("Cloud provider unavailable, falling back to local-only", {
               error: err instanceof Error ? err.message : String(err)
             });
           }
@@ -2996,7 +2812,7 @@ var init_router = __esm({
           enabled: config9.llm.cache.enabled,
           ttlMs: config9.llm.cache.ttlDays * 24 * 60 * 60 * 1e3
         });
-        logger8.info("Router initialized", {
+        logger7.info("Router initialized", {
           mode: this.mode,
           hasCloud: !!this.cloudProvider,
           hasLocal: !!this.localProvider
@@ -3037,7 +2853,7 @@ var init_router = __esm({
               return { provider: this.localProvider, name: "ollama" };
             }
             if (this.cloudProvider) {
-              logger8.info("Local provider unavailable, falling back to cloud");
+              logger7.info("Local provider unavailable, falling back to cloud");
               return { provider: this.cloudProvider, name: cloudName() };
             }
             throw new CortexError(LLM_PROVIDER_UNAVAILABLE, "high", "llm", "No LLM provider available.", { mode: this.mode }, "Start Ollama or configure cloud API key.", false);
@@ -3048,15 +2864,15 @@ var init_router = __esm({
               LLMTask.EMBEDDING_GENERATION
             ];
             if (cheapTasks.includes(task) && this.localProvider && await this.localProvider.isAvailable()) {
-              logger8.debug("Hybrid routing to local provider", { task });
+              logger7.debug("Hybrid routing to local provider", { task });
               return { provider: this.localProvider, name: "ollama" };
             }
             if (this.cloudProvider) {
-              logger8.debug("Hybrid routing to cloud provider", { task });
+              logger7.debug("Hybrid routing to cloud provider", { task });
               return { provider: this.cloudProvider, name: cloudName() };
             }
             if (this.localProvider) {
-              logger8.warn("Cloud provider unavailable in hybrid mode, falling back to local", { task });
+              logger7.warn("Cloud provider unavailable in hybrid mode, falling back to local", { task });
               return { provider: this.localProvider, name: "ollama" };
             }
             throw new CortexError(LLM_PROVIDER_UNAVAILABLE, "high", "llm", "No LLM provider available.", { mode: this.mode }, "Configure cloud API key or start Ollama.", false);
@@ -3066,7 +2882,7 @@ var init_router = __esm({
               return { provider: this.cloudProvider, name: cloudName() };
             }
             if (this.localProvider && this.config.llm.budget.enforcementAction === "fallback-local") {
-              logger8.info("Budget exhausted or cloud unavailable, falling back to local");
+              logger7.info("Budget exhausted or cloud unavailable, falling back to local");
               return { provider: this.localProvider, name: "ollama" };
             }
             if (!this.cloudProvider) {
@@ -3153,7 +2969,7 @@ var init_router = __esm({
                 const mid = Math.floor(confidences.length / 2);
                 const median = confidences.length % 2 !== 0 ? confidences[mid] : (confidences[mid - 1] + confidences[mid]) / 2;
                 if (median < 0.6) {
-                  logger8.info("Local confidence below threshold, escalating to cloud", {
+                  logger7.info("Local confidence below threshold, escalating to cloud", {
                     median: Math.round(median * 100) / 100,
                     task: request.task
                   });
@@ -3166,7 +2982,7 @@ var init_router = __esm({
           }
           return { ...result, data };
         } catch (firstErr) {
-          logger8.warn("Structured output parse failed, retrying with correction", {
+          logger7.warn("Structured output parse failed, retrying with correction", {
             promptId: request.promptId,
             error: firstErr instanceof Error ? firstErr.message : String(firstErr)
           });
@@ -3708,7 +3524,7 @@ var init_unified_query = __esm({
 });
 
 // packages/llm/dist/index.js
-var init_dist3 = __esm({
+var init_dist2 = __esm({
   "packages/llm/dist/index.js"() {
     "use strict";
     init_router();
@@ -3729,908 +3545,30 @@ var init_dist3 = __esm({
   }
 });
 
-// packages/ingest/dist/parsers/markdown.js
-import { unified } from "unified";
-import remarkParse from "remark-parse";
-function getLineRange(node) {
-  return {
-    startLine: node.position?.start.line ?? 1,
-    endLine: node.position?.end.line ?? 1
-  };
-}
-function extractText(node) {
-  if ("value" in node)
-    return node.value;
-  if ("children" in node) {
-    return node.children.map(extractText).join("");
-  }
-  return "";
-}
-var MarkdownParser;
-var init_markdown = __esm({
-  "packages/ingest/dist/parsers/markdown.js"() {
-    "use strict";
-    MarkdownParser = class {
-      supportedExtensions = ["md", "mdx"];
-      async parse(content, filePath) {
-        const tree = unified().use(remarkParse).parse(content);
-        const sections = [];
-        let currentHeading;
-        for (const node of tree.children) {
-          const lines = getLineRange(node);
-          switch (node.type) {
-            case "heading": {
-              const text = extractText(node);
-              currentHeading = text;
-              sections.push({
-                type: "heading",
-                title: text,
-                content: text,
-                startLine: lines.startLine,
-                endLine: lines.endLine,
-                metadata: { depth: node.depth }
-              });
-              break;
-            }
-            case "paragraph": {
-              const text = extractText(node);
-              sections.push({
-                type: "paragraph",
-                title: currentHeading,
-                content: text,
-                startLine: lines.startLine,
-                endLine: lines.endLine
-              });
-              break;
-            }
-            case "code": {
-              sections.push({
-                type: "code",
-                title: currentHeading,
-                content: node.value,
-                language: node.lang ?? void 0,
-                startLine: lines.startLine,
-                endLine: lines.endLine,
-                metadata: { lang: node.lang }
-              });
-              break;
-            }
-            case "list": {
-              const items = node.children.map((item) => extractText(item)).join("\n");
-              sections.push({
-                type: "list",
-                title: currentHeading,
-                content: items,
-                startLine: lines.startLine,
-                endLine: lines.endLine,
-                metadata: { ordered: node.ordered }
-              });
-              break;
-            }
-            case "blockquote": {
-              const text = node.children.map(extractText).join("\n");
-              sections.push({
-                type: "paragraph",
-                title: currentHeading,
-                content: text,
-                startLine: lines.startLine,
-                endLine: lines.endLine,
-                metadata: { blockquote: true }
-              });
-              break;
-            }
-            case "table": {
-              const rows = node.children.map((row) => row.children.map(extractText).join(" | "));
-              sections.push({
-                type: "paragraph",
-                title: currentHeading,
-                content: rows.join("\n"),
-                startLine: lines.startLine,
-                endLine: lines.endLine,
-                metadata: { table: true }
-              });
-              break;
-            }
-            default:
-              break;
-          }
-        }
-        return {
-          sections,
-          metadata: {
-            filePath,
-            format: "markdown",
-            sectionCount: sections.length
-          }
-        };
-      }
-    };
-  }
-});
-
-// packages/ingest/dist/parsers/typescript.js
-import TreeSitter from "tree-sitter";
-import TreeSitterTypeScript from "tree-sitter-typescript";
-function createParser(language) {
-  const parser = new TreeSitter();
-  parser.setLanguage(language);
-  return parser;
-}
-function nodeText(node, source) {
-  return source.slice(node.startIndex, node.endIndex);
-}
-function extractName(node, source) {
-  const nameNode = node.childForFieldName("name");
-  if (nameNode)
-    return nodeText(nameNode, source);
-  for (let i = 0; i < node.childCount; i++) {
-    const child = node.child(i);
-    if (child && child.type === "variable_declarator") {
-      const varName = child.childForFieldName("name");
-      if (varName)
-        return nodeText(varName, source);
-    }
-  }
-  return void 0;
-}
-var tsLanguage, tsxLanguage, TypeScriptParser;
-var init_typescript = __esm({
-  "packages/ingest/dist/parsers/typescript.js"() {
-    "use strict";
-    tsLanguage = TreeSitterTypeScript.typescript;
-    tsxLanguage = TreeSitterTypeScript.tsx;
-    TypeScriptParser = class {
-      supportedExtensions = ["ts", "tsx", "js", "jsx"];
-      tsParser;
-      tsxParser;
-      constructor() {
-        this.tsParser = createParser(tsLanguage);
-        this.tsxParser = createParser(tsxLanguage);
-      }
-      async parse(content, filePath) {
-        const isTsx = filePath.endsWith(".tsx") || filePath.endsWith(".jsx");
-        const parser = isTsx ? this.tsxParser : this.tsParser;
-        const tree = parser.parse(content);
-        const sections = [];
-        this.walkNode(tree.rootNode, content, sections);
-        return {
-          sections,
-          metadata: {
-            filePath,
-            format: isTsx ? "tsx" : "typescript",
-            sectionCount: sections.length
-          }
-        };
-      }
-      walkNode(node, source, sections) {
-        for (let i = 0; i < node.childCount; i++) {
-          const child = node.child(i);
-          if (!child)
-            continue;
-          switch (child.type) {
-            case "function_declaration":
-            case "generator_function_declaration":
-              sections.push({
-                type: "function",
-                title: extractName(child, source),
-                content: nodeText(child, source),
-                startLine: child.startPosition.row + 1,
-                endLine: child.endPosition.row + 1
-              });
-              break;
-            case "class_declaration":
-              sections.push({
-                type: "class",
-                title: extractName(child, source),
-                content: nodeText(child, source),
-                startLine: child.startPosition.row + 1,
-                endLine: child.endPosition.row + 1
-              });
-              break;
-            case "interface_declaration":
-            case "type_alias_declaration":
-              sections.push({
-                type: "interface",
-                title: extractName(child, source),
-                content: nodeText(child, source),
-                startLine: child.startPosition.row + 1,
-                endLine: child.endPosition.row + 1
-              });
-              break;
-            case "enum_declaration":
-              sections.push({
-                type: "interface",
-                title: extractName(child, source),
-                content: nodeText(child, source),
-                startLine: child.startPosition.row + 1,
-                endLine: child.endPosition.row + 1,
-                metadata: { kind: "enum" }
-              });
-              break;
-            case "export_statement": {
-              const declaration = child.childForFieldName("declaration");
-              if (declaration) {
-                this.walkExportedNode(declaration, child, source, sections);
-              } else {
-                sections.push({
-                  type: "export",
-                  content: nodeText(child, source),
-                  startLine: child.startPosition.row + 1,
-                  endLine: child.endPosition.row + 1
-                });
-              }
-              break;
-            }
-            case "lexical_declaration": {
-              const text = nodeText(child, source);
-              if (text.length > 50) {
-                sections.push({
-                  type: "export",
-                  title: extractName(child, source),
-                  content: text,
-                  startLine: child.startPosition.row + 1,
-                  endLine: child.endPosition.row + 1
-                });
-              }
-              break;
-            }
-            case "comment":
-              sections.push({
-                type: "comment",
-                content: nodeText(child, source),
-                startLine: child.startPosition.row + 1,
-                endLine: child.endPosition.row + 1
-              });
-              break;
-            case "import_statement":
-              break;
-            default:
-              if (child.childCount > 0) {
-                this.walkNode(child, source, sections);
-              }
-              break;
-          }
-        }
-      }
-      walkExportedNode(declaration, exportNode, source, sections) {
-        const fullText = nodeText(exportNode, source);
-        const name = extractName(declaration, source);
-        switch (declaration.type) {
-          case "function_declaration":
-          case "generator_function_declaration":
-            sections.push({
-              type: "function",
-              title: name,
-              content: fullText,
-              startLine: exportNode.startPosition.row + 1,
-              endLine: exportNode.endPosition.row + 1,
-              metadata: { exported: true }
-            });
-            break;
-          case "class_declaration":
-            sections.push({
-              type: "class",
-              title: name,
-              content: fullText,
-              startLine: exportNode.startPosition.row + 1,
-              endLine: exportNode.endPosition.row + 1,
-              metadata: { exported: true }
-            });
-            break;
-          case "interface_declaration":
-          case "type_alias_declaration":
-            sections.push({
-              type: "interface",
-              title: name,
-              content: fullText,
-              startLine: exportNode.startPosition.row + 1,
-              endLine: exportNode.endPosition.row + 1,
-              metadata: { exported: true }
-            });
-            break;
-          default:
-            sections.push({
-              type: "export",
-              title: name,
-              content: fullText,
-              startLine: exportNode.startPosition.row + 1,
-              endLine: exportNode.endPosition.row + 1,
-              metadata: { exported: true }
-            });
-            break;
-        }
-      }
-    };
-  }
-});
-
-// packages/ingest/dist/parsers/json-parser.js
-function stripJsonComments(text) {
-  let result = "";
-  let i = 0;
-  let inString = false;
-  while (i < text.length) {
-    const ch = text[i];
-    const next = text[i + 1];
-    if (ch === '"' && (i === 0 || text[i - 1] !== "\\")) {
-      inString = !inString;
-      result += ch;
-      i++;
-      continue;
-    }
-    if (inString) {
-      result += ch;
-      i++;
-      continue;
-    }
-    if (ch === "/" && next === "*") {
-      i += 2;
-      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) {
-        result += text[i] === "\n" ? "\n" : " ";
-        i++;
-      }
-      i += 2;
-      continue;
-    }
-    if (ch === "/" && next === "/") {
-      i += 2;
-      while (i < text.length && text[i] !== "\n")
-        i++;
-      continue;
-    }
-    result += ch;
-    i++;
-  }
-  result = result.replace(/,\s*([\]\}])/g, "$1");
-  return result;
-}
-function parseJsonOrJsonc(content) {
+// packages/ingest/dist/secret-patterns.js
+function compileSecretPattern(pattern) {
   try {
-    return JSON.parse(content);
+    let source = pattern;
+    let flags = "gi";
+    if (source.startsWith("(?i)")) {
+      source = source.slice(4);
+      flags = "gi";
+    }
+    return new RegExp(source, flags);
   } catch {
-    return JSON.parse(stripJsonComments(content));
+    logger8.warn("Invalid secret pattern, skipping", { pattern });
+    return null;
   }
 }
-var JsonParser;
-var init_json_parser = __esm({
-  "packages/ingest/dist/parsers/json-parser.js"() {
-    "use strict";
-    JsonParser = class {
-      supportedExtensions = ["json"];
-      async parse(content, filePath) {
-        const parsed = parseJsonOrJsonc(content);
-        const sections = [];
-        if (typeof parsed !== "object" || parsed === null) {
-          sections.push({
-            type: "unknown",
-            content,
-            startLine: 1,
-            endLine: content.split("\n").length
-          });
-          return { sections, metadata: { filePath, format: "json" } };
-        }
-        const obj = parsed;
-        const lines = content.split("\n");
-        for (const [key, value] of Object.entries(obj)) {
-          const valueStr = JSON.stringify(value, null, 2);
-          const keyPattern = `"${key}"`;
-          let startLine = 1;
-          for (let i = 0; i < lines.length; i++) {
-            if (lines[i].includes(keyPattern)) {
-              startLine = i + 1;
-              break;
-            }
-          }
-          const valueLines = valueStr.split("\n").length;
-          sections.push({
-            type: "property",
-            title: key,
-            content: `${key}: ${valueStr}`,
-            startLine,
-            endLine: startLine + valueLines - 1,
-            metadata: {
-              key,
-              valueType: Array.isArray(value) ? "array" : typeof value
-            }
-          });
-        }
-        const metadata = {
-          filePath,
-          format: "json",
-          sectionCount: sections.length
-        };
-        if (filePath.endsWith("package.json")) {
-          metadata.packageName = obj["name"];
-          metadata.packageVersion = obj["version"];
-        } else if (filePath.endsWith("tsconfig.json") || filePath.endsWith("tsconfig.base.json")) {
-          metadata.tsconfigType = "typescript-config";
-        }
-        return { sections, metadata };
-      }
-    };
-  }
-});
-
-// packages/ingest/dist/parsers/yaml-parser.js
-import { parse as parseYaml } from "yaml";
-var YamlParser;
-var init_yaml_parser = __esm({
-  "packages/ingest/dist/parsers/yaml-parser.js"() {
-    "use strict";
-    YamlParser = class {
-      supportedExtensions = ["yaml", "yml"];
-      async parse(content, filePath) {
-        const parsed = parseYaml(content);
-        const sections = [];
-        if (typeof parsed !== "object" || parsed === null) {
-          sections.push({
-            type: "unknown",
-            content,
-            startLine: 1,
-            endLine: content.split("\n").length
-          });
-          return { sections, metadata: { filePath, format: "yaml" } };
-        }
-        const obj = parsed;
-        const lines = content.split("\n");
-        for (const [key, value] of Object.entries(obj)) {
-          const valueStr = typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
-          let startLine = 1;
-          for (let i = 0; i < lines.length; i++) {
-            if (lines[i].startsWith(`${key}:`) || lines[i].startsWith(`${key} :`)) {
-              startLine = i + 1;
-              break;
-            }
-          }
-          sections.push({
-            type: "property",
-            title: key,
-            content: `${key}: ${valueStr}`,
-            startLine,
-            endLine: startLine + valueStr.split("\n").length - 1,
-            metadata: {
-              key,
-              valueType: Array.isArray(value) ? "array" : typeof value
-            }
-          });
-        }
-        return {
-          sections,
-          metadata: {
-            filePath,
-            format: "yaml",
-            sectionCount: sections.length
-          }
-        };
-      }
-    };
-  }
-});
-
-// packages/ingest/dist/parsers/conversation.js
-function isConversationJson(content) {
-  try {
-    const obj = JSON.parse(content);
-    if (Array.isArray(obj) && obj.length > 0) {
-      const first = obj[0];
-      return Array.isArray(first?.mapping) || typeof first?.mapping === "object" || Array.isArray(first?.messages);
-    }
-    if (Array.isArray(obj?.conversations))
-      return true;
-    if (Array.isArray(obj?.messages) && obj.messages[0]?.role !== void 0)
-      return true;
-    return false;
-  } catch {
-    return false;
-  }
+function compileSecretPatterns(patterns) {
+  return patterns.map((pattern) => compileSecretPattern(pattern)).filter((re) => re !== null);
 }
-function isConversationMarkdown(content) {
-  const lines = content.split("\n");
-  const headings = [];
-  for (const line of lines) {
-    const m = line.match(/^#{1,3}\s+(\S.*)$/);
-    if (m) {
-      headings.push(m[1].trim());
-      if (headings.length >= 2)
-        break;
-    }
-  }
-  if (headings.length < 2)
-    return false;
-  return HUMAN_PATTERN.test(headings[0]) && ASSISTANT_PATTERN.test(headings[1]);
-}
-function parseConversationJson(content) {
-  const obj = JSON.parse(content);
-  const sections = [];
-  let messages = [];
-  if (Array.isArray(obj)) {
-    const first = obj[0];
-    if (first?.mapping && typeof first.mapping === "object") {
-      for (const node of Object.values(first.mapping)) {
-        const msg = node?.message;
-        if (!msg?.author?.role || !msg.content?.parts)
-          continue;
-        const text = msg.content.parts.join("\n").trim();
-        if (text)
-          messages.push({ role: msg.author.role, content: text });
-      }
-    } else if (Array.isArray(first?.messages)) {
-      messages = first.messages;
-    }
-  } else if (Array.isArray(obj?.conversations)) {
-    messages = obj.conversations[0]?.messages ?? [];
-  } else if (Array.isArray(obj?.messages)) {
-    messages = obj.messages;
-  }
-  let lineNum = 1;
-  for (const msg of messages) {
-    const role = (msg.role ?? msg.author?.role ?? "unknown").toLowerCase();
-    if (role === "system")
-      continue;
-    const text = typeof msg.content === "string" ? msg.content : msg.text ?? JSON.stringify(msg.content);
-    if (!text || text.trim().length < 50)
-      continue;
-    const endLine = lineNum + text.split("\n").length;
-    sections.push({
-      type: "paragraph",
-      title: role === "user" ? "Human" : "Assistant",
-      content: text.trim(),
-      startLine: lineNum,
-      endLine,
-      metadata: { role, speaker: role === "user" ? "human" : "assistant" }
-    });
-    lineNum = endLine + 1;
-  }
-  return sections;
-}
-function parseConversationMarkdown(content) {
-  const sections = [];
-  const lines = content.split("\n");
-  let currentRole = null;
-  let blockStart = 0;
-  const blockLines = [];
-  const flush = (endLine) => {
-    if (!currentRole || blockLines.length === 0)
-      return;
-    const text = blockLines.join("\n").trim();
-    if (text.length >= 50) {
-      sections.push({
-        type: "paragraph",
-        title: currentRole,
-        content: text,
-        startLine: blockStart,
-        endLine,
-        metadata: {
-          role: HUMAN_PATTERN.test(currentRole) ? "user" : "assistant",
-          speaker: HUMAN_PATTERN.test(currentRole) ? "human" : "assistant"
-        }
-      });
-    }
-    blockLines.length = 0;
-  };
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const headingMatch = line.match(/^#{1,3}\s+(\S.*)$/);
-    if (headingMatch) {
-      flush(i);
-      currentRole = headingMatch[1].trim();
-      blockStart = i + 2;
-    } else if (currentRole) {
-      blockLines.push(line);
-    }
-  }
-  flush(lines.length);
-  return sections;
-}
-var HUMAN_PATTERN, ASSISTANT_PATTERN, ConversationParser;
-var init_conversation = __esm({
-  "packages/ingest/dist/parsers/conversation.js"() {
-    "use strict";
-    HUMAN_PATTERN = /^(Human|User|Me)$/i;
-    ASSISTANT_PATTERN = /^(Assistant|Claude|ChatGPT|GPT)$/i;
-    ConversationParser = class {
-      supportedExtensions = ["json", "md"];
-      async parse(content, filePath) {
-        const isJson = filePath.endsWith(".json") || filePath.endsWith(".JSON");
-        const sections = isJson ? parseConversationJson(content) : parseConversationMarkdown(content);
-        return {
-          sections,
-          metadata: {
-            format: isJson ? "conversation-json" : "conversation-markdown",
-            messageCount: sections.length
-          }
-        };
-      }
-    };
-  }
-});
-
-// packages/ingest/dist/parsers/index.js
-function getParser(extension, filePath, content) {
-  const ext = extension.toLowerCase();
-  if (content !== void 0 && filePath !== void 0) {
-    if (ext === "json" && isConversationJson(content))
-      return conversationParser;
-    if ((ext === "md" || ext === "mdx") && isConversationMarkdown(content))
-      return conversationParser;
-  }
-  return PARSER_REGISTRY.get(ext);
-}
-function getSupportedExtensions() {
-  return [...PARSER_REGISTRY.keys()];
-}
-var markdownParser, typescriptParser, jsonParser, yamlParser, conversationParser, PARSER_REGISTRY;
-var init_parsers = __esm({
-  "packages/ingest/dist/parsers/index.js"() {
-    "use strict";
-    init_markdown();
-    init_typescript();
-    init_json_parser();
-    init_yaml_parser();
-    init_conversation();
-    markdownParser = new MarkdownParser();
-    typescriptParser = new TypeScriptParser();
-    jsonParser = new JsonParser();
-    yamlParser = new YamlParser();
-    conversationParser = new ConversationParser();
-    PARSER_REGISTRY = /* @__PURE__ */ new Map([
-      ["md", markdownParser],
-      ["mdx", markdownParser],
-      ["ts", typescriptParser],
-      ["tsx", typescriptParser],
-      ["js", typescriptParser],
-      ["jsx", typescriptParser],
-      ["json", jsonParser],
-      ["yaml", yamlParser],
-      ["yml", yamlParser]
-    ]);
-  }
-});
-
-// packages/ingest/dist/chunker.js
-function estimateTokens2(text) {
-  return Math.ceil(text.length / AVG_CHARS_PER_TOKEN2);
-}
-function chunkSections(sections, options = {}) {
-  const maxTokens = options.maxTokens ?? 2e3;
-  const overlapTokens = options.overlapTokens ?? 200;
-  const maxChars = maxTokens * AVG_CHARS_PER_TOKEN2;
-  const overlapChars = overlapTokens * AVG_CHARS_PER_TOKEN2;
-  if (sections.length === 0)
-    return [];
-  const chunks = [];
-  let currentContent = "";
-  let currentStartLine = sections[0].startLine;
-  let currentEndLine = sections[0].startLine;
-  let currentTitles = [];
-  let overlapBuffer = "";
-  for (const section of sections) {
-    const sectionText = section.title ? `## ${section.title}
-${section.content}` : section.content;
-    const sectionTokens = estimateTokens2(sectionText);
-    if (sectionTokens > maxTokens) {
-      if (currentContent.length > 0) {
-        chunks.push(buildChunk(currentContent, currentStartLine, currentEndLine, currentTitles, chunks.length));
-        overlapBuffer = currentContent.slice(-overlapChars);
-        currentContent = "";
-        currentTitles = [];
-      }
-      const subChunks = splitLargeText(sectionText, maxChars, overlapChars, section, chunks.length);
-      chunks.push(...subChunks);
-      overlapBuffer = subChunks.length > 0 ? subChunks[subChunks.length - 1].content.slice(-overlapChars) : "";
-      currentStartLine = section.endLine + 1;
-      currentEndLine = section.endLine;
-      continue;
-    }
-    const combined = currentContent + (currentContent ? "\n\n" : "") + sectionText;
-    if (estimateTokens2(combined) > maxTokens && currentContent.length > 0) {
-      chunks.push(buildChunk(currentContent, currentStartLine, currentEndLine, currentTitles, chunks.length));
-      overlapBuffer = currentContent.slice(-overlapChars);
-      currentContent = overlapBuffer + "\n\n" + sectionText;
-      currentStartLine = section.startLine;
-      currentEndLine = section.endLine;
-      currentTitles = section.title ? [section.title] : [];
-    } else {
-      if (currentContent.length === 0 && overlapBuffer.length > 0) {
-        currentContent = overlapBuffer + "\n\n" + sectionText;
-      } else {
-        currentContent = combined;
-      }
-      if (currentContent === sectionText || currentContent === combined) {
-        if (chunks.length === 0)
-          currentStartLine = section.startLine;
-      }
-      currentEndLine = section.endLine;
-      if (section.title && !currentTitles.includes(section.title)) {
-        currentTitles.push(section.title);
-      }
-    }
-  }
-  if (currentContent.trim().length > 0) {
-    chunks.push(buildChunk(currentContent, currentStartLine, currentEndLine, currentTitles, chunks.length));
-  }
-  return chunks;
-}
-function buildChunk(content, startLine, endLine, titles, index) {
-  return {
-    content: content.trim(),
-    startLine,
-    endLine,
-    sectionTitles: [...titles],
-    tokenEstimate: estimateTokens2(content),
-    index
-  };
-}
-function splitLargeText(text, maxChars, overlapChars, section, startIndex) {
-  const chunks = [];
-  const lines = text.split("\n");
-  let currentChunk = "";
-  let chunkStartLine = section.startLine;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const next = currentChunk + (currentChunk ? "\n" : "") + line;
-    if (next.length > maxChars && currentChunk.length > 0) {
-      const lineOffset = section.startLine + i;
-      chunks.push(buildChunk(currentChunk, chunkStartLine, lineOffset - 1, section.title ? [section.title] : [], startIndex + chunks.length));
-      const overlap = currentChunk.slice(-overlapChars);
-      currentChunk = overlap + "\n" + line;
-      chunkStartLine = lineOffset;
-    } else {
-      currentChunk = next;
-    }
-  }
-  if (currentChunk.trim().length > 0) {
-    chunks.push(buildChunk(currentChunk, chunkStartLine, section.endLine, section.title ? [section.title] : [], startIndex + chunks.length));
-  }
-  return chunks;
-}
-var AVG_CHARS_PER_TOKEN2;
-var init_chunker = __esm({
-  "packages/ingest/dist/chunker.js"() {
-    "use strict";
-    AVG_CHARS_PER_TOKEN2 = 4;
-  }
-});
-
-// packages/ingest/dist/watcher.js
-import { watch } from "chokidar";
-import { extname } from "node:path";
-function escapeRegex(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-function globToRegex(pattern) {
-  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-  const regexStr = escaped.replace(/\*\*/g, "___GLOBSTAR___").replace(/\*/g, "[^/\\\\]*").replace(/___GLOBSTAR___/g, ".*");
-  return new RegExp("^" + regexStr + "$");
-}
-var logger9, FileWatcher;
-var init_watcher = __esm({
-  "packages/ingest/dist/watcher.js"() {
+var logger8;
+var init_secret_patterns = __esm({
+  "packages/ingest/dist/secret-patterns.js"() {
     "use strict";
     init_dist();
-    logger9 = createLogger("ingest:watcher");
-    FileWatcher = class _FileWatcher {
-      watcher = null;
-      options;
-      handler = null;
-      debounceTimers = /* @__PURE__ */ new Map();
-      compiledExcludePatterns;
-      constructor(options) {
-        this.options = options;
-        this.compiledExcludePatterns = options.exclude.map((pattern) => {
-          if (pattern.includes("*")) {
-            return { pattern: globToRegex(pattern), isGlob: true };
-          }
-          return pattern;
-        });
-      }
-      static fromConfig(config9) {
-        return new _FileWatcher({
-          dirs: config9.watchDirs,
-          exclude: config9.exclude,
-          fileTypes: config9.fileTypes,
-          debounceMs: config9.debounceMs,
-          followSymlinks: config9.followSymlinks,
-          maxFileSize: config9.maxFileSize
-        });
-      }
-      onFileChange(handler) {
-        this.handler = handler;
-      }
-      start() {
-        if (this.watcher)
-          return;
-        const ignored = this.buildIgnorePatterns();
-        this.watcher = watch(this.options.dirs, {
-          ignored,
-          persistent: true,
-          ignoreInitial: this.options.ignoreInitial ?? false,
-          followSymlinks: this.options.followSymlinks,
-          awaitWriteFinish: {
-            stabilityThreshold: 200,
-            pollInterval: 100
-          }
-        });
-        this.watcher.on("add", (path) => this.handleEvent(path, "add"));
-        this.watcher.on("change", (path) => this.handleEvent(path, "change"));
-        this.watcher.on("unlink", (path) => this.handleEvent(path, "unlink"));
-        this.watcher.on("error", (error) => {
-          logger9.error("Watcher error", { error: error instanceof Error ? error.message : String(error) });
-        });
-        this.watcher.on("ready", () => {
-          logger9.info("File watcher ready", { dirs: this.options.dirs });
-        });
-      }
-      async stop() {
-        if (!this.watcher)
-          return;
-        for (const timer of this.debounceTimers.values()) {
-          clearTimeout(timer);
-        }
-        this.debounceTimers.clear();
-        await this.watcher.close();
-        this.watcher = null;
-        logger9.info("File watcher stopped");
-      }
-      handleEvent(path, changeType) {
-        if (this.isExcluded(path))
-          return;
-        const ext = extname(path).slice(1).toLowerCase();
-        if (this.options.fileTypes.length > 0 && !this.options.fileTypes.includes(ext)) {
-          return;
-        }
-        const existing = this.debounceTimers.get(path);
-        if (existing) {
-          clearTimeout(existing);
-        }
-        const timer = setTimeout(() => {
-          this.debounceTimers.delete(path);
-          eventBus.emit({
-            type: "file.changed",
-            payload: { path, changeType },
-            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-            source: "ingest:watcher"
-          });
-          if (this.handler) {
-            try {
-              this.handler(path, changeType);
-            } catch (err) {
-              logger9.error("File change handler error", {
-                path,
-                error: err instanceof Error ? err.message : String(err)
-              });
-            }
-          }
-        }, this.options.debounceMs);
-        this.debounceTimers.set(path, timer);
-      }
-      isExcluded(filePath) {
-        const parts = filePath.split(/[\\/]/);
-        for (const compiled of this.compiledExcludePatterns) {
-          if (typeof compiled === "string") {
-            if (parts.some((p) => p === compiled))
-              return true;
-          } else {
-            if (parts.some((p) => compiled.pattern.test(p)))
-              return true;
-          }
-        }
-        return false;
-      }
-      buildIgnorePatterns() {
-        const patterns = [];
-        for (const pattern of this.options.exclude) {
-          if (pattern.includes("*")) {
-            patterns.push(globToRegex(pattern));
-          } else if (pattern.includes(".")) {
-            patterns.push(new RegExp(`(^|[\\\\/])${escapeRegex(pattern)}$`));
-          } else {
-            patterns.push(new RegExp(`(^|[\\\\/])${escapeRegex(pattern)}([\\\\/]|$)`));
-          }
-        }
-        return patterns;
-      }
-    };
+    logger8 = createLogger("ingest:secret-patterns");
   }
 });
 
@@ -4670,7 +3608,7 @@ async function runMergeDetection(entities, sourceFile, store, router, mergeConfi
             timestamp: (/* @__PURE__ */ new Date()).toISOString(),
             source: "ingest:post-ingest"
           });
-          logger10.info("Entity merged", {
+          logger9.info("Entity merged", {
             survivor: entity.name,
             merged: candidate.name,
             confidence: result.data.confidence,
@@ -4678,7 +3616,7 @@ async function runMergeDetection(entities, sourceFile, store, router, mergeConfi
           });
         }
       } catch (err) {
-        logger10.debug("Merge detection failed for pair", {
+        logger9.debug("Merge detection failed for pair", {
           entity: entity.name,
           candidate: candidate.name,
           error: err instanceof Error ? err.message : String(err)
@@ -4751,14 +3689,14 @@ async function runContradictionDetection(entities, sourceFile, projectId, privac
             timestamp: (/* @__PURE__ */ new Date()).toISOString(),
             source: "ingest:post-ingest"
           });
-          logger10.info("Contradiction detected", {
+          logger9.info("Contradiction detected", {
             entityA: entity.name,
             entityB: candidate.name,
             severity: result.data.severity
           });
         }
       } catch (err) {
-        logger10.debug("Contradiction detection failed for pair", {
+        logger9.debug("Contradiction detection failed for pair", {
           entity: entity.name,
           candidate: candidate.name,
           error: err instanceof Error ? err.message : String(err)
@@ -4767,30 +3705,31 @@ async function runContradictionDetection(entities, sourceFile, projectId, privac
     }
   }
 }
-var logger10;
+var logger9;
 var init_post_ingest = __esm({
   "packages/ingest/dist/post-ingest.js"() {
     "use strict";
     init_dist();
-    init_dist3();
-    logger10 = createLogger("ingest:post-ingest");
+    init_dist2();
+    logger9 = createLogger("ingest:post-ingest");
   }
 });
 
 // packages/ingest/dist/pipeline.js
-import { readFileSync as readFileSync4, statSync as statSync2, realpathSync } from "node:fs";
+import { readFileSync as readFileSync4, statSync, realpathSync } from "node:fs";
 import { relative, extname as extname2, resolve as resolve3 } from "node:path";
 import { createHash as createHash2 } from "node:crypto";
-var logger11, IngestionPipeline;
+var logger10, IngestionPipeline;
 var init_pipeline = __esm({
   "packages/ingest/dist/pipeline.js"() {
     "use strict";
     init_dist();
-    init_dist3();
+    init_dist2();
     init_parsers();
     init_chunker();
+    init_secret_patterns();
     init_post_ingest();
-    logger11 = createLogger("ingest:pipeline");
+    logger10 = createLogger("ingest:pipeline");
     IngestionPipeline = class {
       router;
       store;
@@ -4804,14 +3743,7 @@ var init_pipeline = __esm({
         this.router = router;
         this.store = store;
         this.options = options;
-        this.compiledSecretPatterns = (options.secretPatterns ?? []).map((pattern) => {
-          try {
-            return new RegExp(pattern, "g");
-          } catch {
-            logger11.warn("Invalid secret pattern, skipping", { pattern });
-            return null;
-          }
-        }).filter((r) => r !== null);
+        this.compiledSecretPatterns = compileSecretPatterns(options.secretPatterns ?? []);
       }
       /**
        * Scrub secrets from content before sending to cloud LLMs.
@@ -4833,7 +3765,7 @@ var init_pipeline = __esm({
           const projectRoot = resolve3(this.options.projectRoot);
           const rel = relative(projectRoot, realPath);
           if (rel.startsWith("..") || resolve3(realPath) !== resolve3(projectRoot, rel)) {
-            logger11.warn("Symlink traversal blocked \u2014 file resolves outside project root", {
+            logger10.warn("Symlink traversal blocked \u2014 file resolves outside project root", {
               filePath,
               realPath,
               projectRoot
@@ -4844,17 +3776,17 @@ var init_pipeline = __esm({
         }
         const ext = extname2(filePath).slice(1).toLowerCase();
         if (!getParser(ext)) {
-          logger11.debug("Unsupported file type, skipping", { filePath, ext });
+          logger10.debug("Unsupported file type, skipping", { filePath, ext });
           return { fileId: "", entityIds: [], relationshipIds: [], status: "skipped" };
         }
         let stat;
         try {
-          stat = statSync2(filePath);
+          stat = statSync(filePath);
         } catch {
           return { fileId: "", entityIds: [], relationshipIds: [], status: "failed", error: "File not found" };
         }
         if (stat.size > this.options.maxFileSize) {
-          logger11.warn("File too large, skipping", { filePath, size: stat.size, max: this.options.maxFileSize });
+          logger10.warn("File too large, skipping", { filePath, size: stat.size, max: this.options.maxFileSize });
           return { fileId: "", entityIds: [], relationshipIds: [], status: "skipped", error: "File too large" };
         }
         let content;
@@ -4873,7 +3805,7 @@ var init_pipeline = __esm({
         const contentHash = createHash2("sha256").update(content).digest("hex");
         const existingFile = await this.store.getFile(filePath);
         if (existingFile && existingFile.contentHash === contentHash && existingFile.status === "ingested") {
-          logger11.debug("File unchanged, skipping", { filePath });
+          logger10.debug("File unchanged, skipping", { filePath });
           return {
             fileId: existingFile.id,
             entityIds: existingFile.entityIds,
@@ -4882,15 +3814,15 @@ var init_pipeline = __esm({
           };
         }
         if (!this.store.tryAcquireFileLock(filePath, this.options.projectId)) {
-          logger11.info("File is being processed by another process, skipping", { filePath });
+          logger10.info("File is being processed by another process, skipping", { filePath });
           return { fileId: "", entityIds: [], relationshipIds: [], status: "skipped", error: "Already being processed" };
         }
         const relativePath = relative(this.options.projectRoot, filePath);
         try {
-          logger11.debug("Parsing file", { filePath, ext });
+          logger10.debug("Parsing file", { filePath, ext });
           const parseResult = await parser.parse(content, filePath);
           const chunks = chunkSections(parseResult.sections);
-          logger11.debug("Chunked file", { filePath, chunks: chunks.length });
+          logger10.debug("Chunked file", { filePath, chunks: chunks.length });
           const allEntities = [];
           let extractionErrors = 0;
           for (const chunk of chunks) {
@@ -4903,7 +3835,7 @@ var init_pipeline = __esm({
             throw new CortexError(LLM_EXTRACTION_FAILED, "high", "llm", `Entity extraction failed for all ${chunks.length} chunk(s) in ${filePath}`);
           }
           const deduped = this.deduplicateEntities(allEntities);
-          logger11.debug("Extracted entities", { filePath, raw: allEntities.length, deduped: deduped.length });
+          logger10.debug("Extracted entities", { filePath, raw: allEntities.length, deduped: deduped.length });
           const storedEntities = [];
           this.store.transaction(() => {
             if (existingFile) {
@@ -4947,7 +3879,7 @@ var init_pipeline = __esm({
             timestamp: (/* @__PURE__ */ new Date()).toISOString(),
             source: "ingest:pipeline"
           });
-          logger11.info("File ingested", {
+          logger10.info("File ingested", {
             filePath: relativePath,
             entities: entityIds.length,
             relationships: relationshipIds.length
@@ -4955,7 +3887,7 @@ var init_pipeline = __esm({
           return { fileId: fileRecord.id, entityIds, relationshipIds, status: "ingested" };
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
-          logger11.error("Ingestion failed", { filePath, error: errorMsg });
+          logger10.error("Ingestion failed", { filePath, error: errorMsg });
           this.store.releaseFileLock(filePath);
           await this.store.upsertFile({
             path: filePath,
@@ -5019,7 +3951,7 @@ var init_pipeline = __esm({
             hadError: false
           };
         } catch (err) {
-          logger11.warn("Entity extraction failed for chunk", {
+          logger10.warn("Entity extraction failed for chunk", {
             filePath,
             chunk: chunk.index,
             error: err instanceof Error ? err.message : String(err)
@@ -5081,7 +4013,7 @@ var init_pipeline = __esm({
           }
           return relationshipIds;
         } catch (err) {
-          logger11.warn("Relationship inference failed", {
+          logger10.warn("Relationship inference failed", {
             error: err instanceof Error ? err.message : String(err)
           });
           return [];
@@ -5113,12 +4045,14 @@ __export(dist_exports, {
   TypeScriptParser: () => TypeScriptParser,
   YamlParser: () => YamlParser,
   chunkSections: () => chunkSections,
+  compileSecretPattern: () => compileSecretPattern,
+  compileSecretPatterns: () => compileSecretPatterns,
   getParser: () => getParser,
   getSupportedExtensions: () => getSupportedExtensions,
   isConversationJson: () => isConversationJson,
   isConversationMarkdown: () => isConversationMarkdown
 });
-var init_dist4 = __esm({
+var init_dist3 = __esm({
   "packages/ingest/dist/index.js"() {
     "use strict";
     init_parsers();
@@ -5130,6 +4064,1310 @@ var init_dist4 = __esm({
     init_chunker();
     init_watcher();
     init_pipeline();
+    init_secret_patterns();
+  }
+});
+
+// packages/graph/dist/migrations/001-initial.js
+function up(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      root_path TEXT NOT NULL UNIQUE,
+      privacy_level TEXT NOT NULL DEFAULT 'standard',
+      file_count INTEGER DEFAULT 0,
+      entity_count INTEGER DEFAULT 0,
+      last_ingested_at TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS entities (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      name TEXT NOT NULL,
+      content TEXT NOT NULL,
+      summary TEXT,
+      properties TEXT,
+      confidence REAL NOT NULL,
+      source_file TEXT NOT NULL,
+      source_start_line INTEGER,
+      source_end_line INTEGER,
+      project_id TEXT NOT NULL,
+      extracted_by TEXT NOT NULL,
+      tags TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT,
+      FOREIGN KEY (project_id) REFERENCES projects(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS relationships (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      source_entity_id TEXT NOT NULL,
+      target_entity_id TEXT NOT NULL,
+      description TEXT,
+      confidence REAL NOT NULL,
+      properties TEXT,
+      extracted_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (source_entity_id) REFERENCES entities(id),
+      FOREIGN KEY (target_entity_id) REFERENCES entities(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS files (
+      id TEXT PRIMARY KEY,
+      path TEXT NOT NULL UNIQUE,
+      relative_path TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      file_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      last_modified TEXT NOT NULL,
+      last_ingested_at TEXT,
+      entity_ids TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      parse_error TEXT,
+      FOREIGN KEY (project_id) REFERENCES projects(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS contradictions (
+      id TEXT PRIMARY KEY,
+      entity_id_a TEXT NOT NULL,
+      entity_id_b TEXT NOT NULL,
+      description TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      suggested_resolution TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      resolved_action TEXT,
+      resolved_at TEXT,
+      detected_at TEXT NOT NULL,
+      FOREIGN KEY (entity_id_a) REFERENCES entities(id),
+      FOREIGN KEY (entity_id_b) REFERENCES entities(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS token_usage (
+      id TEXT PRIMARY KEY,
+      request_id TEXT NOT NULL,
+      task TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL,
+      output_tokens INTEGER NOT NULL,
+      estimated_cost_usd REAL NOT NULL,
+      latency_ms INTEGER NOT NULL,
+      timestamp TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS dead_letter_queue (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      error_code TEXT NOT NULL,
+      error_message TEXT NOT NULL,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      first_failed_at TEXT NOT NULL,
+      last_failed_at TEXT NOT NULL,
+      next_retry_at TEXT,
+      status TEXT NOT NULL DEFAULT 'pending'
+    );
+
+    -- Full-text search
+    CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(name, content, summary, tags);
+
+    -- Indexes
+    CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
+    CREATE INDEX IF NOT EXISTS idx_entities_project ON entities(project_id);
+    CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status);
+    CREATE INDEX IF NOT EXISTS idx_entities_source ON entities(source_file);
+    CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_entity_id);
+    CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_entity_id);
+    CREATE INDEX IF NOT EXISTS idx_relationships_type ON relationships(type);
+    CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
+    CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
+    CREATE INDEX IF NOT EXISTS idx_files_hash ON files(content_hash);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_month ON token_usage(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_dlq_status ON dead_letter_queue(status);
+
+    -- Schema version tracking
+    CREATE TABLE IF NOT EXISTS schema_version (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    );
+
+    INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (${MIGRATION_VERSION}, datetime('now'));
+  `);
+}
+var MIGRATION_VERSION;
+var init_initial = __esm({
+  "packages/graph/dist/migrations/001-initial.js"() {
+    "use strict";
+    MIGRATION_VERSION = 1;
+  }
+});
+
+// packages/graph/dist/migrations/002-add-indexes.js
+function up2(db) {
+  const currentVersion = db.prepare("SELECT MAX(version) as v FROM schema_version").get()?.v ?? 0;
+  if (currentVersion >= MIGRATION_VERSION2)
+    return;
+  db.exec(`
+    -- Composite index for common entity queries (project + status + soft-delete filter)
+    CREATE INDEX IF NOT EXISTS idx_entities_project_status_deleted
+      ON entities(project_id, status, deleted_at);
+
+    -- Contradiction lookups by status and severity
+    CREATE INDEX IF NOT EXISTS idx_contradictions_status_severity
+      ON contradictions(status, severity);
+
+    -- Contradiction lookups by entity
+    CREATE INDEX IF NOT EXISTS idx_contradictions_entity_a
+      ON contradictions(entity_id_a);
+
+    CREATE INDEX IF NOT EXISTS idx_contradictions_entity_b
+      ON contradictions(entity_id_b);
+
+    -- Files by project + status (used during watch/ingest)
+    CREATE INDEX IF NOT EXISTS idx_files_project_status
+      ON files(project_id, status);
+
+    INSERT OR IGNORE INTO schema_version (version, applied_at)
+      VALUES (${MIGRATION_VERSION2}, datetime('now'));
+  `);
+}
+var MIGRATION_VERSION2;
+var init_add_indexes = __esm({
+  "packages/graph/dist/migrations/002-add-indexes.js"() {
+    "use strict";
+    MIGRATION_VERSION2 = 2;
+  }
+});
+
+// packages/graph/dist/sqlite-store.js
+import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
+import { copyFileSync, statSync as statSync2, mkdirSync as mkdirSync3, chmodSync } from "node:fs";
+import { dirname } from "node:path";
+import { homedir as homedir4 } from "node:os";
+function resolveHomePath(p) {
+  return p.startsWith("~") ? p.replace("~", homedir4()) : p;
+}
+function now() {
+  return (/* @__PURE__ */ new Date()).toISOString();
+}
+function rowToContradiction(row) {
+  return {
+    id: row.id,
+    entityIds: [row.entity_id_a, row.entity_id_b],
+    description: row.description,
+    severity: row.severity,
+    suggestedResolution: row.suggested_resolution ?? void 0,
+    status: row.status,
+    resolvedAction: row.resolved_action ?? void 0,
+    resolvedAt: row.resolved_at ?? void 0,
+    detectedAt: row.detected_at
+  };
+}
+function rowToEntity(row) {
+  return {
+    id: row.id,
+    type: row.type,
+    name: row.name,
+    content: row.content,
+    summary: row.summary ?? void 0,
+    properties: row.properties ? JSON.parse(row.properties) : {},
+    confidence: row.confidence,
+    sourceFile: row.source_file,
+    sourceRange: row.source_start_line != null && row.source_end_line != null ? { startLine: row.source_start_line, endLine: row.source_end_line } : void 0,
+    projectId: row.project_id,
+    extractedBy: JSON.parse(row.extracted_by),
+    tags: row.tags ? JSON.parse(row.tags) : [],
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+function rowToRelationship(row) {
+  return {
+    id: row.id,
+    type: row.type,
+    sourceEntityId: row.source_entity_id,
+    targetEntityId: row.target_entity_id,
+    description: row.description ?? void 0,
+    confidence: row.confidence,
+    properties: row.properties ? JSON.parse(row.properties) : {},
+    extractedBy: JSON.parse(row.extracted_by),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+function rowToFile(row) {
+  return {
+    id: row.id,
+    path: row.path,
+    relativePath: row.relative_path,
+    projectId: row.project_id,
+    contentHash: row.content_hash,
+    fileType: row.file_type,
+    sizeBytes: row.size_bytes,
+    lastModified: row.last_modified,
+    lastIngestedAt: row.last_ingested_at ?? void 0,
+    entityIds: row.entity_ids ? JSON.parse(row.entity_ids) : [],
+    status: row.status,
+    parseError: row.parse_error ?? void 0
+  };
+}
+function rowToProject(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    rootPath: row.root_path,
+    privacyLevel: row.privacy_level,
+    fileCount: row.file_count,
+    entityCount: row.entity_count,
+    lastIngestedAt: row.last_ingested_at ?? void 0,
+    createdAt: row.created_at
+  };
+}
+var SQLiteStore;
+var init_sqlite_store = __esm({
+  "packages/graph/dist/sqlite-store.js"() {
+    "use strict";
+    init_dist();
+    init_initial();
+    init_add_indexes();
+    SQLiteStore = class {
+      db;
+      dbPath;
+      constructor(options = {}) {
+        const { dbPath = "~/.cortex/cortex.db", walMode = true, backupOnStartup = true } = options;
+        this.dbPath = resolveHomePath(dbPath);
+        mkdirSync3(dirname(this.dbPath), { recursive: true, mode: 448 });
+        if (backupOnStartup) {
+          this.backupSync();
+        }
+        this.db = new Database(this.dbPath);
+        try {
+          chmodSync(this.dbPath, 384);
+        } catch {
+        }
+        if (walMode) {
+          this.db.pragma("journal_mode = WAL");
+        }
+        this.db.pragma("foreign_keys = ON");
+        this.db.pragma("busy_timeout = 5000");
+        this.migrate();
+      }
+      migrate() {
+        try {
+          up(this.db);
+          up2(this.db);
+        } catch (err) {
+          throw new CortexError(GRAPH_DB_ERROR, "critical", "graph", `Migration failed: ${err instanceof Error ? err.message : String(err)}`, void 0, "Delete the database and restart.");
+        }
+      }
+      backupSync() {
+        try {
+          const stat = statSync2(this.dbPath);
+          if (stat.isFile()) {
+            const backupPath = `${this.dbPath}.backup`;
+            copyFileSync(this.dbPath, backupPath);
+            try {
+              chmodSync(backupPath, 384);
+            } catch {
+            }
+          }
+        } catch {
+        }
+      }
+      close() {
+        this.db.close();
+      }
+      transaction(fn) {
+        return this.db.transaction(fn)();
+      }
+      // --- Entities ---
+      createEntitySync(entity) {
+        return this._createEntity(entity);
+      }
+      async createEntity(entity) {
+        return this._createEntity(entity);
+      }
+      _createEntity(entity) {
+        const id = randomUUID();
+        const ts = now();
+        this.db.prepare(`
+      INSERT INTO entities (
+        id, type, name, content, summary, properties, confidence,
+        source_file, source_start_line, source_end_line,
+        project_id, extracted_by, tags, status, created_at, updated_at
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?, ?, ?, ?
+      )
+    `).run(id, entity.type, entity.name, entity.content, entity.summary ?? null, JSON.stringify(entity.properties), entity.confidence, entity.sourceFile, entity.sourceRange?.startLine ?? null, entity.sourceRange?.endLine ?? null, entity.projectId, JSON.stringify(entity.extractedBy), JSON.stringify(entity.tags), entity.status, ts, ts);
+        this.db.prepare(`
+      INSERT INTO entities_fts (rowid, name, content, summary, tags)
+      VALUES (
+        (SELECT rowid FROM entities WHERE id = ?),
+        ?, ?, ?, ?
+      )
+    `).run(id, entity.name, entity.content, entity.summary ?? "", entity.tags.join(" "));
+        return { ...entity, id, createdAt: ts, updatedAt: ts };
+      }
+      async getEntity(id) {
+        const row = this.db.prepare("SELECT * FROM entities WHERE id = ? AND deleted_at IS NULL").get(id);
+        return row ? rowToEntity(row) : null;
+      }
+      async updateEntity(id, updates) {
+        const existing = await this.getEntity(id);
+        if (!existing) {
+          throw new CortexError(GRAPH_ENTITY_NOT_FOUND, "low", "graph", `Entity not found: ${id}`, { entityId: id });
+        }
+        const merged = { ...existing, ...updates, updatedAt: now() };
+        this.db.prepare(`
+      UPDATE entities SET
+        type = ?, name = ?, content = ?, summary = ?,
+        properties = ?, confidence = ?,
+        source_file = ?, source_start_line = ?, source_end_line = ?,
+        extracted_by = ?, tags = ?, status = ?, updated_at = ?
+      WHERE id = ?
+    `).run(merged.type, merged.name, merged.content, merged.summary ?? null, JSON.stringify(merged.properties), merged.confidence, merged.sourceFile, merged.sourceRange?.startLine ?? null, merged.sourceRange?.endLine ?? null, JSON.stringify(merged.extractedBy), JSON.stringify(merged.tags), merged.status, merged.updatedAt, id);
+        this.db.prepare(`
+      UPDATE entities_fts SET name = ?, content = ?, summary = ?, tags = ?
+      WHERE rowid = (SELECT rowid FROM entities WHERE id = ?)
+    `).run(merged.name, merged.content, merged.summary ?? "", merged.tags.join(" "), id);
+        return merged;
+      }
+      async deleteEntity(id, soft = true) {
+        if (soft) {
+          this.db.prepare("UPDATE entities SET deleted_at = ?, status = ? WHERE id = ?").run(now(), "deleted", id);
+        } else {
+          this.db.prepare("DELETE FROM entities_fts WHERE rowid = (SELECT rowid FROM entities WHERE id = ?)").run(id);
+          this.db.prepare("DELETE FROM entities WHERE id = ?").run(id);
+        }
+      }
+      async findEntities(query) {
+        const conditions = ["deleted_at IS NULL"];
+        const params = [];
+        if (query.type) {
+          conditions.push("type = ?");
+          params.push(query.type);
+        }
+        if (query.projectId) {
+          conditions.push("project_id = ?");
+          params.push(query.projectId);
+        }
+        if (query.status) {
+          conditions.push("status = ?");
+          params.push(query.status);
+        }
+        if (query.since) {
+          conditions.push("created_at >= ?");
+          params.push(query.since);
+        }
+        if (query.before) {
+          conditions.push("created_at < ?");
+          params.push(query.before);
+        }
+        let sql;
+        if (query.search) {
+          const sanitizedSearch = query.search.replace(/[^a-zA-Z0-9\s]/g, " ").trim();
+          if (!sanitizedSearch) {
+            return [];
+          }
+          sql = `
+        SELECT e.* FROM entities e
+        JOIN entities_fts fts ON fts.rowid = e.rowid
+        WHERE fts.entities_fts MATCH ? AND ${conditions.join(" AND ")}
+        ORDER BY rank
+      `;
+          params.unshift(sanitizedSearch);
+        } else {
+          sql = `
+        SELECT * FROM entities
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY created_at DESC
+      `;
+        }
+        if (query.limit) {
+          sql += " LIMIT ?";
+          params.push(query.limit);
+        }
+        if (query.offset) {
+          sql += " OFFSET ?";
+          params.push(query.offset);
+        }
+        const rows = this.db.prepare(sql).all(...params);
+        return rows.map(rowToEntity);
+      }
+      // --- Relationships ---
+      async createRelationship(rel) {
+        const id = randomUUID();
+        const ts = now();
+        this.db.prepare(`
+      INSERT INTO relationships (
+        id, type, source_entity_id, target_entity_id,
+        description, confidence, properties, extracted_by,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, rel.type, rel.sourceEntityId, rel.targetEntityId, rel.description ?? null, rel.confidence, JSON.stringify(rel.properties), JSON.stringify(rel.extractedBy), ts, ts);
+        return { ...rel, id, createdAt: ts, updatedAt: ts };
+      }
+      async getRelationship(id) {
+        const row = this.db.prepare("SELECT * FROM relationships WHERE id = ?").get(id);
+        return row ? rowToRelationship(row) : null;
+      }
+      async getRelationshipsForEntity(entityId, direction = "both", limit = 200) {
+        let sql;
+        let params;
+        if (direction === "out") {
+          sql = "SELECT * FROM relationships WHERE source_entity_id = ? LIMIT ?";
+          params = [entityId, limit];
+        } else if (direction === "in") {
+          sql = "SELECT * FROM relationships WHERE target_entity_id = ? LIMIT ?";
+          params = [entityId, limit];
+        } else {
+          sql = "SELECT * FROM relationships WHERE source_entity_id = ? OR target_entity_id = ? LIMIT ?";
+          params = [entityId, entityId, limit];
+        }
+        const rows = this.db.prepare(sql).all(...params);
+        return rows.map(rowToRelationship);
+      }
+      async getRelationshipsForEntities(entityIds) {
+        if (entityIds.length === 0)
+          return [];
+        const placeholders = entityIds.map(() => "?").join(",");
+        const sql = `
+      SELECT * FROM relationships
+      WHERE source_entity_id IN (${placeholders})
+         OR target_entity_id IN (${placeholders})
+      LIMIT 2000
+    `;
+        const rows = this.db.prepare(sql).all(...entityIds, ...entityIds);
+        return rows.map(rowToRelationship);
+      }
+      async deleteRelationship(id) {
+        this.db.prepare("DELETE FROM relationships WHERE id = ?").run(id);
+      }
+      /**
+       * Delete all entities (and their relationships + FTS entries) for a specific source file.
+       * Used during re-ingestion to replace stale entities atomically.
+       */
+      deleteEntitiesBySourceFile(sourceFile) {
+        return this.db.transaction(() => {
+          const relResult = this.db.prepare(`
+        DELETE FROM relationships
+        WHERE source_entity_id IN (SELECT id FROM entities WHERE source_file = ?)
+           OR target_entity_id IN (SELECT id FROM entities WHERE source_file = ?)
+      `).run(sourceFile, sourceFile);
+          this.db.prepare(`
+        DELETE FROM entities_fts
+        WHERE rowid IN (SELECT rowid FROM entities WHERE source_file = ? AND deleted_at IS NULL)
+      `).run(sourceFile);
+          this.db.prepare(`
+        DELETE FROM contradictions
+        WHERE entity_id_a IN (SELECT id FROM entities WHERE source_file = ?)
+           OR entity_id_b IN (SELECT id FROM entities WHERE source_file = ?)
+      `).run(sourceFile, sourceFile);
+          const entityResult = this.db.prepare("DELETE FROM entities WHERE source_file = ?").run(sourceFile);
+          return {
+            deletedEntities: entityResult.changes,
+            deletedRelationships: relResult.changes
+          };
+        })();
+      }
+      /**
+       * Atomically try to acquire a processing lock for a file path.
+       * Returns true if lock acquired (status set to 'processing'), false if already locked.
+       * Uses SQLite's atomic UPDATE to prevent races between concurrent processes.
+       * projectId is required for new files (foreign key constraint on files table).
+       */
+      tryAcquireFileLock(filePath, projectId) {
+        const result = this.db.prepare(`
+      UPDATE files SET status = 'processing'
+      WHERE path = ? AND status != 'processing'
+    `).run(filePath);
+        if (result.changes > 0)
+          return true;
+        const exists = this.db.prepare("SELECT 1 FROM files WHERE path = ?").get(filePath);
+        if (!exists) {
+          try {
+            this.db.prepare(`
+          INSERT INTO files (id, path, relative_path, project_id, content_hash, file_type, size_bytes, last_modified, status)
+          VALUES (?, ?, '', ?, '', '', 0, '', 'processing')
+        `).run(randomUUID(), filePath, projectId);
+            return true;
+          } catch {
+            return false;
+          }
+        }
+        return false;
+      }
+      /**
+       * Release a file processing lock (called after ingestion completes or fails).
+       * The upsertFile() call at the end of ingestion will set the final status.
+       */
+      releaseFileLock(filePath) {
+        this.db.prepare(`
+      UPDATE files SET status = 'pending'
+      WHERE path = ? AND status = 'processing'
+    `).run(filePath);
+      }
+      deleteBySourcePath(pathPrefix) {
+        const normalized = pathPrefix.replace(/\//g, "\\");
+        const escaped = normalized.replace(/[%_\\]/g, "\\$&");
+        const pattern = escaped + "%";
+        return this.db.transaction(() => {
+          const relResult = this.db.prepare(`
+        DELETE FROM relationships
+        WHERE source_entity_id IN (SELECT id FROM entities WHERE source_file LIKE ? ESCAPE '\\')
+           OR target_entity_id IN (SELECT id FROM entities WHERE source_file LIKE ? ESCAPE '\\')
+      `).run(pattern, pattern);
+          this.db.prepare(`
+        DELETE FROM entities_fts
+        WHERE rowid IN (SELECT rowid FROM entities WHERE source_file LIKE ? ESCAPE '\\' AND deleted_at IS NULL)
+      `).run(pattern);
+          const entityResult = this.db.prepare("DELETE FROM entities WHERE source_file LIKE ? ESCAPE '\\'").run(pattern);
+          const fileResult = this.db.prepare("DELETE FROM files WHERE path LIKE ? ESCAPE '\\'").run(pattern);
+          return {
+            deletedEntities: entityResult.changes,
+            deletedRelationships: relResult.changes,
+            deletedFiles: fileResult.changes
+          };
+        })();
+      }
+      resetDatabase() {
+        this.db.transaction(() => {
+          this.db.prepare("DELETE FROM contradictions").run();
+          this.db.prepare("DELETE FROM relationships").run();
+          this.db.prepare("DELETE FROM entities_fts").run();
+          this.db.prepare("DELETE FROM entities").run();
+          this.db.prepare("DELETE FROM files").run();
+        })();
+      }
+      pruneSoftDeleted() {
+        return this.db.transaction(() => {
+          const relResult = this.db.prepare(`
+        DELETE FROM relationships
+        WHERE source_entity_id IN (SELECT id FROM entities WHERE deleted_at IS NOT NULL)
+           OR target_entity_id IN (SELECT id FROM entities WHERE deleted_at IS NOT NULL)
+      `).run();
+          this.db.prepare(`
+        DELETE FROM entities_fts
+        WHERE rowid IN (SELECT rowid FROM entities WHERE deleted_at IS NOT NULL)
+      `).run();
+          const entityResult = this.db.prepare("DELETE FROM entities WHERE deleted_at IS NOT NULL").run();
+          return {
+            deletedEntities: entityResult.changes,
+            deletedRelationships: relResult.changes
+          };
+        })();
+      }
+      // --- Files ---
+      async upsertFile(file) {
+        const existing = this.db.prepare("SELECT * FROM files WHERE path = ?").get(file.path);
+        if (existing) {
+          this.db.prepare(`
+        UPDATE files SET
+          relative_path = ?, project_id = ?, content_hash = ?,
+          file_type = ?, size_bytes = ?, last_modified = ?,
+          last_ingested_at = ?, entity_ids = ?, status = ?, parse_error = ?
+        WHERE path = ?
+      `).run(file.relativePath, file.projectId, file.contentHash, file.fileType, file.sizeBytes, file.lastModified, file.lastIngestedAt ?? null, JSON.stringify(file.entityIds), file.status, file.parseError ?? null, file.path);
+          return { ...file, id: existing.id };
+        }
+        const id = randomUUID();
+        this.db.prepare(`
+      INSERT INTO files (
+        id, path, relative_path, project_id, content_hash,
+        file_type, size_bytes, last_modified, last_ingested_at,
+        entity_ids, status, parse_error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, file.path, file.relativePath, file.projectId, file.contentHash, file.fileType, file.sizeBytes, file.lastModified, file.lastIngestedAt ?? null, JSON.stringify(file.entityIds), file.status, file.parseError ?? null);
+        return { ...file, id };
+      }
+      /**
+       * Check if a file has already been ingested with the given content hash.
+       * Synchronous for use in cost estimation without async overhead.
+       */
+      isFileCached(filePath, contentHash) {
+        const row = this.db.prepare("SELECT 1 FROM files WHERE path = ? AND content_hash = ? AND status = 'ingested'").get(filePath, contentHash);
+        return !!row;
+      }
+      async getFile(path) {
+        const row = this.db.prepare("SELECT * FROM files WHERE path = ?").get(path);
+        return row ? rowToFile(row) : null;
+      }
+      async getFilesByProject(projectId) {
+        const rows = this.db.prepare("SELECT * FROM files WHERE project_id = ?").all(projectId);
+        return rows.map(rowToFile);
+      }
+      async getRecentFiles(sinceDays = 7, limit = 20) {
+        const since = new Date(Date.now() - sinceDays * 864e5).toISOString();
+        const rows = this.db.prepare(`SELECT * FROM files
+       WHERE status = 'ingested' AND last_ingested_at >= ?
+       ORDER BY last_ingested_at DESC LIMIT ?`).all(since, limit);
+        return rows.map(rowToFile);
+      }
+      // --- Projects ---
+      async createProject(project) {
+        const id = randomUUID();
+        const ts = now();
+        this.db.prepare(`
+      INSERT INTO projects (
+        id, name, root_path, privacy_level,
+        file_count, entity_count, last_ingested_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, project.name, project.rootPath, project.privacyLevel, project.fileCount, project.entityCount, project.lastIngestedAt ?? null, ts);
+        return { ...project, id, createdAt: ts };
+      }
+      async getProject(id) {
+        const row = this.db.prepare(`SELECT p.*,
+        (SELECT COUNT(*) FROM files WHERE project_id = p.id) AS live_file_count,
+        (SELECT COUNT(*) FROM entities WHERE project_id = p.id AND deleted_at IS NULL AND status != 'deleted') AS live_entity_count
+      FROM projects p WHERE p.id = ?`).get(id);
+        if (!row)
+          return null;
+        return {
+          ...rowToProject(row),
+          fileCount: row.live_file_count,
+          entityCount: row.live_entity_count
+        };
+      }
+      async listProjects() {
+        const rows = this.db.prepare(`SELECT p.*,
+        (SELECT COUNT(*) FROM files WHERE project_id = p.id) AS live_file_count,
+        (SELECT COUNT(*) FROM entities WHERE project_id = p.id AND deleted_at IS NULL AND status != 'deleted') AS live_entity_count
+      FROM projects p ORDER BY p.created_at DESC`).all();
+        return rows.map((row) => ({
+          ...rowToProject(row),
+          fileCount: row.live_file_count,
+          entityCount: row.live_entity_count
+        }));
+      }
+      async getProjectByName(name) {
+        const row = this.db.prepare(`SELECT p.*,
+        (SELECT COUNT(*) FROM files WHERE project_id = p.id) AS live_file_count,
+        (SELECT COUNT(*) FROM entities WHERE project_id = p.id AND deleted_at IS NULL AND status != 'deleted') AS live_entity_count
+      FROM projects p WHERE p.name = ?`).get(name);
+        if (!row)
+          return null;
+        return {
+          ...rowToProject(row),
+          fileCount: row.live_file_count,
+          entityCount: row.live_entity_count
+        };
+      }
+      async deleteProject(id) {
+        const result = this.db.prepare("DELETE FROM projects WHERE id = ?").run(id);
+        return result.changes > 0;
+      }
+      // --- Contradictions ---
+      async createContradiction(contradiction) {
+        const id = randomUUID();
+        this.db.prepare(`
+      INSERT INTO contradictions (
+        id, entity_id_a, entity_id_b, description, severity,
+        suggested_resolution, status, resolved_action, resolved_at, detected_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, contradiction.entityIds[0], contradiction.entityIds[1], contradiction.description, contradiction.severity, contradiction.suggestedResolution ?? null, contradiction.status, contradiction.resolvedAction ?? null, contradiction.resolvedAt ?? null, contradiction.detectedAt);
+        return { ...contradiction, id };
+      }
+      async findContradictions(query = {}) {
+        const conditions = [];
+        const params = [];
+        if (query.status) {
+          conditions.push("status = ?");
+          params.push(query.status);
+        }
+        if (query.entityId) {
+          conditions.push("(entity_id_a = ? OR entity_id_b = ?)");
+          params.push(query.entityId, query.entityId);
+        }
+        const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+        let sql = `SELECT * FROM contradictions ${where} ORDER BY detected_at DESC`;
+        if (query.limit) {
+          sql += " LIMIT ?";
+          params.push(query.limit);
+        }
+        const rows = this.db.prepare(sql).all(...params);
+        return rows.map(rowToContradiction);
+      }
+      async updateContradiction(id, update) {
+        this.db.prepare(`
+      UPDATE contradictions SET status = ?, resolved_action = ?, resolved_at = ? WHERE id = ?
+    `).run(update.status, update.resolvedAction ?? null, update.resolvedAt ?? null, id);
+      }
+      // --- Search ---
+      async searchEntities(text, limit = 20) {
+        const sanitized = text.replace(/[^a-zA-Z0-9\s]/g, " ").trim();
+        if (!sanitized)
+          return [];
+        const rows = this.db.prepare(`
+      SELECT e.* FROM entities e
+      JOIN entities_fts fts ON fts.rowid = e.rowid
+      WHERE fts.entities_fts MATCH ? AND e.deleted_at IS NULL
+      ORDER BY rank
+      LIMIT ?
+    `).all(sanitized, limit);
+        return rows.map(rowToEntity);
+      }
+      async semanticSearch(_embedding, _limit = 20) {
+        return [];
+      }
+      // --- Stats ---
+      async getStats() {
+        const entityCount = this.db.prepare("SELECT COUNT(*) as count FROM entities WHERE deleted_at IS NULL AND status != 'deleted'").get().count;
+        const relationshipCount = this.db.prepare("SELECT COUNT(*) as count FROM relationships").get().count;
+        const fileCount = this.db.prepare("SELECT COUNT(*) as count FROM files").get().count;
+        const projectCount = this.db.prepare("SELECT COUNT(*) as count FROM projects").get().count;
+        const contradictionCount = this.db.prepare("SELECT COUNT(*) as count FROM contradictions WHERE status = 'active'").get().count;
+        let dbSizeBytes = 0;
+        try {
+          dbSizeBytes = statSync2(this.dbPath).size;
+        } catch {
+        }
+        return {
+          entityCount,
+          relationshipCount,
+          fileCount,
+          projectCount,
+          contradictionCount,
+          dbSizeBytes,
+          vectorDbSizeBytes: 0
+          // Managed by VectorStore
+        };
+      }
+      // --- Report ---
+      getReportData() {
+        const fileRows = this.db.prepare("SELECT status, COUNT(*) as count FROM files GROUP BY status").all();
+        const fileStatus = { ingested: 0, failed: 0, skipped: 0, pending: 0 };
+        for (const row of fileRows) {
+          if (row.status in fileStatus) {
+            fileStatus[row.status] = row.count;
+          }
+        }
+        const failedFiles = this.db.prepare(`SELECT path, relative_path, parse_error FROM files
+       WHERE status = 'failed' AND parse_error IS NOT NULL
+       ORDER BY path LIMIT 50`).all().map((r) => ({ path: r.path, relativePath: r.relative_path, parseError: r.parse_error }));
+        const entityRows = this.db.prepare(`SELECT type, COUNT(*) as count, AVG(confidence) as avg_confidence
+       FROM entities WHERE deleted_at IS NULL AND status = 'active'
+       GROUP BY type ORDER BY count DESC`).all();
+        const entityBreakdown = entityRows.map((r) => ({
+          type: r.type,
+          count: r.count,
+          avgConfidence: r.avg_confidence
+        }));
+        const supersededCount = this.db.prepare("SELECT COUNT(*) as count FROM entities WHERE status = 'superseded'").get().count;
+        const relRows = this.db.prepare("SELECT type, COUNT(*) as count FROM relationships GROUP BY type ORDER BY count DESC").all();
+        const relationshipBreakdown = relRows.map((r) => ({ type: r.type, count: r.count }));
+        const contrRows = this.db.prepare("SELECT status, severity, COUNT(*) as count FROM contradictions GROUP BY status, severity").all();
+        const contradictions = {
+          active: 0,
+          resolved: 0,
+          dismissed: 0,
+          highSeverity: 0,
+          mediumSeverity: 0,
+          lowSeverity: 0
+        };
+        for (const r of contrRows) {
+          if (r.status === "active")
+            contradictions.active += r.count;
+          if (r.status === "resolved")
+            contradictions.resolved += r.count;
+          if (r.status === "dismissed")
+            contradictions.dismissed += r.count;
+          if (r.severity === "high" || r.severity === "critical")
+            contradictions.highSeverity += r.count;
+          if (r.severity === "medium")
+            contradictions.mediumSeverity += r.count;
+          if (r.severity === "low")
+            contradictions.lowSeverity += r.count;
+        }
+        const topContrRows = this.db.prepare(`SELECT c.id, c.severity, c.description, ea.name as entity_a, eb.name as entity_b
+       FROM contradictions c
+       LEFT JOIN entities ea ON c.entity_id_a = ea.id
+       LEFT JOIN entities eb ON c.entity_id_b = eb.id
+       WHERE c.status = 'active'
+       ORDER BY CASE c.severity
+         WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3
+       END, c.detected_at DESC
+       LIMIT 10`).all();
+        const topContradictions = topContrRows.map((r) => ({
+          id: r.id.slice(0, 8),
+          severity: r.severity,
+          description: r.description,
+          entityA: r.entity_a ?? "unknown",
+          entityB: r.entity_b ?? "unknown"
+        }));
+        const tokenRow = this.db.prepare(`SELECT
+        SUM(CAST(JSON_EXTRACT(extracted_by, '$.tokensUsed.input') AS INTEGER)) as total_input,
+        SUM(CAST(JSON_EXTRACT(extracted_by, '$.tokensUsed.output') AS INTEGER)) as total_output
+       FROM entities WHERE deleted_at IS NULL`).get();
+        return {
+          generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          fileStatus,
+          failedFiles,
+          entityBreakdown,
+          supersededCount,
+          relationshipBreakdown,
+          contradictions,
+          topContradictions,
+          tokenEstimate: {
+            totalInput: tokenRow.total_input ?? 0,
+            totalOutput: tokenRow.total_output ?? 0
+          }
+        };
+      }
+      // --- Maintenance ---
+      async backup() {
+        const backupPath = `${this.dbPath}.backup-${Date.now()}`;
+        await this.db.backup(backupPath);
+        try {
+          chmodSync(backupPath, 384);
+        } catch {
+        }
+        return backupPath;
+      }
+      async integrityCheck() {
+        const details = [];
+        const orphanedRels = this.db.prepare(`
+      SELECT COUNT(*) as count FROM relationships r
+      WHERE NOT EXISTS (SELECT 1 FROM entities WHERE id = r.source_entity_id)
+         OR NOT EXISTS (SELECT 1 FROM entities WHERE id = r.target_entity_id)
+    `).get().count;
+        if (orphanedRels > 0) {
+          details.push(`Found ${orphanedRels} orphaned relationships`);
+        }
+        const missingProjects = this.db.prepare(`
+      SELECT COUNT(*) as count FROM files f
+      WHERE NOT EXISTS (SELECT 1 FROM projects WHERE id = f.project_id)
+    `).get().count;
+        if (missingProjects > 0) {
+          details.push(`Found ${missingProjects} files referencing missing projects`);
+        }
+        const integrityResult = this.db.pragma("integrity_check");
+        const sqliteOk = integrityResult.length === 1 && integrityResult[0].integrity_check === "ok";
+        if (!sqliteOk) {
+          details.push("SQLite integrity check failed");
+        }
+        return {
+          ok: orphanedRels === 0 && missingProjects === 0 && sqliteOk,
+          orphanedRelationships: orphanedRels,
+          missingFiles: missingProjects,
+          details
+        };
+      }
+      // --- Token Usage ---
+      insertTokenUsage(record) {
+        this.db.prepare(`
+      INSERT OR IGNORE INTO token_usage (id, request_id, task, provider, model, input_tokens, output_tokens, estimated_cost_usd, latency_ms, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(record.id, record.requestId, record.task, record.provider, record.model, record.inputTokens, record.outputTokens, record.estimatedCostUsd, record.latencyMs, record.timestamp);
+      }
+      getTokenUsage(since) {
+        if (since) {
+          return this.db.prepare("SELECT * FROM token_usage WHERE timestamp >= ? ORDER BY timestamp DESC").all(since);
+        }
+        return this.db.prepare("SELECT * FROM token_usage ORDER BY timestamp DESC").all();
+      }
+      getTokenUsageSummary(since) {
+        const whereClause = since ? "WHERE timestamp >= ?" : "";
+        const params = since ? [since] : [];
+        const row = this.db.prepare(`SELECT COALESCE(SUM(estimated_cost_usd), 0) as cost, COALESCE(SUM(input_tokens), 0) as input, COALESCE(SUM(output_tokens), 0) as output, COUNT(*) as count FROM token_usage ${whereClause}`).get(...params);
+        return { totalCostUsd: row.cost, totalInputTokens: row.input, totalOutputTokens: row.output, requestCount: row.count };
+      }
+      // --- Graph visualization data ---
+      getGraphData(options = {}) {
+        const limit = options.limit ?? 2e3;
+        let entitySql = `SELECT id, name, type, confidence, source_file FROM entities WHERE status = 'active'`;
+        const params = [];
+        if (options.projectId) {
+          entitySql += ` AND project_id = ?`;
+          params.push(options.projectId);
+        }
+        entitySql += ` ORDER BY confidence DESC LIMIT ?`;
+        params.push(limit);
+        const entityRows = this.db.prepare(entitySql).all(...params);
+        const entityIds = new Set(entityRows.map((e) => e.id));
+        const relRows = this.db.prepare(`SELECT id, type, source_entity_id, target_entity_id, confidence
+       FROM relationships
+       LIMIT ?`).all(limit * 2);
+        const edges = relRows.filter((r) => entityIds.has(r.source_entity_id) && entityIds.has(r.target_entity_id)).map((r) => ({
+          id: r.id,
+          source: r.source_entity_id,
+          target: r.target_entity_id,
+          type: r.type,
+          confidence: r.confidence
+        }));
+        return {
+          nodes: entityRows.map((e) => ({
+            id: e.id,
+            name: e.name,
+            type: e.type,
+            confidence: e.confidence,
+            sourceFile: e.source_file
+          })),
+          edges
+        };
+      }
+    };
+  }
+});
+
+// packages/graph/dist/vector-store.js
+import { connect } from "@lancedb/lancedb";
+import { mkdirSync as mkdirSync4 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+function resolveHomePath2(p) {
+  return p.startsWith("~") ? p.replace("~", homedir5()) : p;
+}
+var logger11, TABLE_NAME, VectorStore;
+var init_vector_store = __esm({
+  "packages/graph/dist/vector-store.js"() {
+    "use strict";
+    init_dist();
+    logger11 = createLogger("graph:vector-store");
+    TABLE_NAME = "entity_embeddings";
+    VectorStore = class {
+      db = null;
+      table = null;
+      dbPath;
+      dimensions;
+      constructor(options = {}) {
+        this.dbPath = resolveHomePath2(options.dbPath ?? "~/.cortex/vector.lance");
+        this.dimensions = options.dimensions ?? 384;
+      }
+      async initialize() {
+        mkdirSync4(this.dbPath, { recursive: true });
+        this.db = await connect(this.dbPath);
+        try {
+          this.table = await this.db.openTable(TABLE_NAME);
+        } catch {
+          logger11.debug("Vector table does not exist yet, will create on first add");
+        }
+      }
+      async ensureTable() {
+        if (this.table)
+          return this.table;
+        if (!this.db)
+          throw new Error("VectorStore not initialized");
+        this.table = await this.db.createTable(TABLE_NAME, [
+          {
+            id: "_init",
+            entityId: "_init",
+            vector: new Array(this.dimensions).fill(0),
+            text: ""
+          }
+        ]);
+        await this.table.delete('id = "_init"');
+        return this.table;
+      }
+      async addVectors(records) {
+        if (records.length === 0)
+          return;
+        const table = await this.ensureTable();
+        const rows = records.map((r) => ({
+          id: r.entityId,
+          entityId: r.entityId,
+          vector: Array.from(r.vector),
+          text: r.text
+        }));
+        await table.add(rows);
+        logger11.debug(`Added ${rows.length} vectors`);
+      }
+      async search(queryVector, limit = 20) {
+        if (!this.table)
+          return [];
+        const results = await this.table.search(Array.from(queryVector)).limit(limit).toArray();
+        return results.map((r) => ({
+          entityId: r.entityId,
+          distance: r._distance,
+          text: r.text
+        }));
+      }
+      async deleteByEntityId(entityId) {
+        if (!this.table)
+          return;
+        await this.table.delete(`entityId = "${entityId}"`);
+      }
+      async count() {
+        if (!this.table)
+          return 0;
+        return await this.table.countRows();
+      }
+    };
+  }
+});
+
+// packages/graph/dist/query-engine.js
+function estimateTokens2(text) {
+  return Math.ceil(text.length / AVG_CHARS_PER_TOKEN2);
+}
+var logger12, AVG_CHARS_PER_TOKEN2, FTS_STOP_WORDS, QueryEngine;
+var init_query_engine = __esm({
+  "packages/graph/dist/query-engine.js"() {
+    "use strict";
+    init_dist();
+    logger12 = createLogger("graph:query-engine");
+    AVG_CHARS_PER_TOKEN2 = 4;
+    FTS_STOP_WORDS = /* @__PURE__ */ new Set([
+      "a",
+      "an",
+      "the",
+      "and",
+      "or",
+      "but",
+      "in",
+      "on",
+      "at",
+      "to",
+      "for",
+      "of",
+      "with",
+      "by",
+      "from",
+      "is",
+      "are",
+      "was",
+      "were",
+      "be",
+      "been",
+      "being",
+      "have",
+      "has",
+      "had",
+      "do",
+      "does",
+      "did",
+      "will",
+      "would",
+      "could",
+      "should",
+      "may",
+      "might",
+      "shall",
+      "can",
+      "need",
+      "must",
+      "what",
+      "which",
+      "who",
+      "how",
+      "why",
+      "when",
+      "where",
+      "that",
+      "this",
+      "these",
+      "those",
+      "it",
+      "its",
+      "me",
+      "my",
+      "you",
+      "your",
+      "we",
+      "our",
+      "they",
+      "their",
+      "he",
+      "she",
+      "i",
+      "all",
+      "any",
+      "each",
+      "some",
+      "no",
+      "not",
+      "so",
+      "yet",
+      "use",
+      "used",
+      "using",
+      "about",
+      "tell",
+      "know",
+      "get",
+      "got",
+      "make",
+      "made",
+      "see",
+      "give",
+      "go",
+      "come",
+      "take"
+    ]);
+    QueryEngine = class {
+      sqliteStore;
+      vectorStore;
+      maxContextTokens;
+      maxResultEntities;
+      ftsWeight;
+      vectorWeight;
+      constructor(sqliteStore, vectorStore, options = {}) {
+        this.sqliteStore = sqliteStore;
+        this.vectorStore = vectorStore;
+        this.maxContextTokens = options.maxContextTokens ?? 5e4;
+        this.maxResultEntities = options.maxResultEntities ?? 30;
+        this.ftsWeight = options.ftsWeight ?? 0.4;
+        this.vectorWeight = options.vectorWeight ?? 0.6;
+      }
+      async assembleContext(query, queryEmbedding, projectId) {
+        const [ftsResults, vectorResults] = await Promise.all([
+          this.ftsSearch(query, projectId),
+          queryEmbedding ? this.vectorStore.search(queryEmbedding, 30) : Promise.resolve([])
+        ]);
+        const rankedEntities = this.mergeAndRank(ftsResults, vectorResults);
+        const contextEntities = [];
+        let totalTokens = 0;
+        const budgetForEntities = Math.floor(this.maxContextTokens * 0.7);
+        for (const entity of rankedEntities) {
+          if (contextEntities.length >= this.maxResultEntities)
+            break;
+          const entityTokens = estimateTokens2(entity.content) + estimateTokens2(entity.name);
+          if (totalTokens + entityTokens > budgetForEntities)
+            break;
+          contextEntities.push(entity);
+          totalTokens += entityTokens;
+        }
+        const privacyFiltered = await this.filterByPrivacy(contextEntities);
+        const entityIds = new Set(privacyFiltered.map((e) => e.id));
+        const allRels = await this.sqliteStore.getRelationshipsForEntities([...entityIds]);
+        const uniqueRels = allRels.filter((r) => entityIds.has(r.sourceEntityId) && entityIds.has(r.targetEntityId));
+        const relTokens = uniqueRels.reduce((sum, r) => sum + estimateTokens2(r.description ?? "") + 20, 0);
+        const filteredTokens = privacyFiltered.reduce((sum, e) => sum + estimateTokens2(e.content) + estimateTokens2(e.name), 0);
+        logger12.debug("Context assembled", {
+          entities: privacyFiltered.length,
+          entitiesFiltered: contextEntities.length - privacyFiltered.length,
+          relationships: uniqueRels.length,
+          totalTokensEstimate: filteredTokens + relTokens
+        });
+        return {
+          entities: privacyFiltered,
+          relationships: uniqueRels,
+          totalTokensEstimate: filteredTokens + relTokens
+        };
+      }
+      async filterByPrivacy(entities) {
+        if (entities.length === 0)
+          return entities;
+        const projectIds = [...new Set(entities.map((e) => e.projectId))];
+        const projectPrivacy = /* @__PURE__ */ new Map();
+        for (const pid of projectIds) {
+          const project = await this.sqliteStore.getProject(pid);
+          if (project) {
+            projectPrivacy.set(pid, project.privacyLevel);
+          }
+        }
+        const filtered = [];
+        let excluded = 0;
+        let redacted = 0;
+        for (const entity of entities) {
+          const level = projectPrivacy.get(entity.projectId) ?? "standard";
+          if (level === "restricted") {
+            excluded++;
+            continue;
+          }
+          if (level === "sensitive") {
+            redacted++;
+            filtered.push({ ...entity, content: "[REDACTED]", properties: {} });
+            continue;
+          }
+          filtered.push(entity);
+        }
+        if (excluded > 0 || redacted > 0) {
+          logger12.info("Privacy filter applied", { excluded, redacted, kept: filtered.length });
+        }
+        return filtered;
+      }
+      /**
+       * Converts a natural language query to an FTS5-safe keyword query.
+       * FTS5 uses AND semantics by default, so "what is the architecture" would
+       * require ALL words to match. We strip stop words and use OR semantics so
+       * entities matching ANY meaningful keyword are returned.
+       */
+      buildFtsQuery(query) {
+        const keywords = (query ?? "").replace(/[^a-zA-Z0-9\s]/g, " ").toLowerCase().split(/\s+/).filter((w) => w.length >= 3 && !FTS_STOP_WORDS.has(w));
+        if (keywords.length === 0) {
+          return query.replace(/[^a-zA-Z0-9\s]/g, " ").trim();
+        }
+        return keywords.join(" OR ");
+      }
+      async ftsSearch(query, projectId) {
+        const ftsQuery = this.buildFtsQuery(query);
+        try {
+          if (projectId) {
+            return await this.sqliteStore.findEntities({
+              search: ftsQuery,
+              projectId,
+              limit: 30
+            });
+          }
+          return await this.sqliteStore.searchEntities(ftsQuery, 30);
+        } catch (err) {
+          logger12.warn("FTS search failed, returning empty results", {
+            error: err instanceof Error ? err.message : String(err),
+            query: ftsQuery
+          });
+          return [];
+        }
+      }
+      mergeAndRank(ftsResults, vectorResults) {
+        const scores = /* @__PURE__ */ new Map();
+        for (let i = 0; i < ftsResults.length; i++) {
+          const entity = ftsResults[i];
+          const positionScore = 1 - i / Math.max(ftsResults.length, 1);
+          scores.set(entity.id, {
+            entity,
+            score: positionScore * this.ftsWeight
+          });
+        }
+        if (vectorResults.length > 0) {
+          const maxDist = Math.max(...vectorResults.map((r) => r.distance), 1);
+          for (const vr of vectorResults) {
+            const distScore = 1 - vr.distance / maxDist;
+            const existing = scores.get(vr.entityId);
+            if (existing) {
+              existing.score += distScore * this.vectorWeight;
+            }
+          }
+        }
+        return [...scores.values()].sort((a, b) => b.score - a.score).map((s) => s.entity);
+      }
+    };
+  }
+});
+
+// packages/graph/dist/index.js
+var init_dist4 = __esm({
+  "packages/graph/dist/index.js"() {
+    "use strict";
+    init_sqlite_store();
+    init_vector_store();
+    init_query_engine();
+  }
+});
+
+// node_modules/ip-address/dist/address-error.js
+var require_address_error = __commonJS({
+  "node_modules/ip-address/dist/address-error.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.AddressError = void 0;
+    var AddressError = class extends Error {
+      constructor(message, parseMessage) {
+        super(message);
+        this.name = "AddressError";
+        this.parseMessage = parseMessage;
+      }
+    };
+    exports.AddressError = AddressError;
   }
 });
 
@@ -5140,9 +5378,11 @@ var require_common = __commonJS({
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.isInSubnet = isInSubnet;
     exports.isCorrect = isCorrect;
+    exports.prefixLengthFromMask = prefixLengthFromMask;
     exports.numberToPaddedHex = numberToPaddedHex;
     exports.stringToPaddedHex = stringToPaddedHex;
     exports.testBit = testBit;
+    var address_error_1 = require_address_error();
     function isInSubnet(address) {
       if (this.subnetMask < address.subnetMask) {
         return false;
@@ -5162,6 +5402,20 @@ var require_common = __commonJS({
         }
         return this.parsedSubnet === String(this.subnetMask);
       };
+    }
+    function prefixLengthFromMask(value, totalBits) {
+      const binary = value.toString(2).padStart(totalBits, "0");
+      if (binary.length > totalBits) {
+        throw new address_error_1.AddressError("Invalid subnet mask.");
+      }
+      const firstZero = binary.indexOf("0");
+      if (firstZero === -1) {
+        return totalBits;
+      }
+      if (binary.slice(firstZero).includes("1")) {
+        throw new address_error_1.AddressError("Invalid subnet mask.");
+      }
+      return firstZero;
     }
     function numberToPaddedHex(number) {
       return number.toString(16).padStart(2, "0");
@@ -5190,23 +5444,6 @@ var require_constants = __commonJS({
     exports.GROUPS = 4;
     exports.RE_ADDRESS = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/g;
     exports.RE_SUBNET_STRING = /\/\d{1,2}$/;
-  }
-});
-
-// node_modules/ip-address/dist/address-error.js
-var require_address_error = __commonJS({
-  "node_modules/ip-address/dist/address-error.js"(exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.AddressError = void 0;
-    var AddressError = class extends Error {
-      constructor(message, parseMessage) {
-        super(message);
-        this.name = "AddressError";
-        this.parseMessage = parseMessage;
-      }
-    };
-    exports.AddressError = AddressError;
   }
 });
 
@@ -5244,32 +5481,40 @@ var require_ipv4 = __commonJS({
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.Address4 = void 0;
     var common = __importStar(require_common());
-    var constants = __importStar(require_constants());
+    var constants2 = __importStar(require_constants());
     var address_error_1 = require_address_error();
+    var isCorrect4 = common.isCorrect(constants2.BITS);
     var Address4 = class _Address4 {
       constructor(address) {
-        this.groups = constants.GROUPS;
+        this.groups = constants2.GROUPS;
         this.parsedAddress = [];
         this.parsedSubnet = "";
         this.subnet = "/32";
         this.subnetMask = 32;
         this.v4 = true;
-        this.isCorrect = common.isCorrect(constants.BITS);
+        this.isCorrect = isCorrect4;
         this.isInSubnet = common.isInSubnet;
         this.address = address;
-        const subnet = constants.RE_SUBNET_STRING.exec(address);
+        const subnet = constants2.RE_SUBNET_STRING.exec(address);
         if (subnet) {
           this.parsedSubnet = subnet[0].replace("/", "");
           this.subnetMask = parseInt(this.parsedSubnet, 10);
           this.subnet = `/${this.subnetMask}`;
-          if (this.subnetMask < 0 || this.subnetMask > constants.BITS) {
+          if (this.subnetMask < 0 || this.subnetMask > constants2.BITS) {
             throw new address_error_1.AddressError("Invalid subnet mask.");
           }
-          address = address.replace(constants.RE_SUBNET_STRING, "");
+          address = address.replace(constants2.RE_SUBNET_STRING, "");
         }
         this.addressMinusSuffix = address;
         this.parsedAddress = this.parse(address);
       }
+      /**
+       * Returns true if the given string is a valid IPv4 address (with optional
+       * CIDR subnet), false otherwise. Host bits in the subnet portion are
+       * allowed (e.g. `192.168.1.5/24` is valid); for strict network-address
+       * validation compare `correctForm()` to `startAddress().correctForm()`,
+       * or use `networkForm()`.
+       */
       static isValid(address) {
         try {
           new _Address4(address);
@@ -5278,56 +5523,122 @@ var require_ipv4 = __commonJS({
           return false;
         }
       }
-      /*
-       * Parses a v4 address
+      /**
+       * Parses an IPv4 address string into its four octet groups and stores the
+       * result on `this.parsedAddress`. Called automatically by the constructor;
+       * you typically don't need to call it directly. Throws `AddressError` if
+       * the input is not a valid IPv4 address.
        */
       parse(address) {
         const groups = address.split(".");
-        if (!address.match(constants.RE_ADDRESS)) {
+        if (!address.match(constants2.RE_ADDRESS)) {
           throw new address_error_1.AddressError("Invalid IPv4 address.");
         }
         return groups;
       }
       /**
-       * Returns the correct form of an address
-       * @memberof Address4
-       * @instance
-       * @returns {String}
+       * Returns the address in correct form: octets joined with `.` and any
+       * leading zeros stripped (e.g. `192.168.1.1`). For IPv4 this matches the
+       * canonical dotted-decimal representation.
        */
       correctForm() {
         return this.parsedAddress.map((part) => parseInt(part, 10)).join(".");
       }
       /**
-       * Converts a hex string to an IPv4 address object
-       * @memberof Address4
-       * @static
+       * Construct an `Address4` from an address and a dotted-decimal subnet
+       * mask given as separate strings (e.g. as returned by Node's
+       * `os.networkInterfaces()`). Throws `AddressError` if the mask is
+       * non-contiguous (e.g. `255.0.255.0`).
+       * @example
+       * var address = Address4.fromAddressAndMask('192.168.1.1', '255.255.255.0');
+       * address.subnetMask; // 24
+       */
+      static fromAddressAndMask(address, mask) {
+        const bits = common.prefixLengthFromMask(new _Address4(mask).bigInt(), constants2.BITS);
+        return new _Address4(`${address}/${bits}`);
+      }
+      /**
+       * Construct an `Address4` from an address and a Cisco-style wildcard mask
+       * given as separate strings (e.g. `0.0.0.255` for a `/24`). The wildcard
+       * mask is the bitwise inverse of the subnet mask. Throws `AddressError`
+       * if the mask is non-contiguous (e.g. `0.255.0.255`).
+       * @example
+       * var address = Address4.fromAddressAndWildcardMask('10.0.0.1', '0.0.0.255');
+       * address.subnetMask; // 24
+       */
+      static fromAddressAndWildcardMask(address, wildcardMask) {
+        const wildcard = new _Address4(wildcardMask).bigInt();
+        const allOnes = (BigInt(1) << BigInt(constants2.BITS)) - BigInt(1);
+        const mask = wildcard ^ allOnes;
+        const bits = common.prefixLengthFromMask(mask, constants2.BITS);
+        return new _Address4(`${address}/${bits}`);
+      }
+      /**
+       * Construct an `Address4` from a wildcard pattern with trailing `*`
+       * octets. The number of trailing wildcards determines the prefix
+       * length: each `*` represents 8 bits.
+       *
+       * Only trailing whole-octet wildcards are supported. Partial-octet
+       * wildcards (e.g. `192.168.0.1*`) and interior wildcards (e.g.
+       * `192.*.0.1`) throw `AddressError`.
+       * @example
+       * Address4.fromWildcard('192.168.0.*').subnet;   // '/24'
+       * Address4.fromWildcard('192.168.*.*').subnet;   // '/16'
+       * Address4.fromWildcard('*.*.*.*').subnet;       // '/0'
+       */
+      static fromWildcard(input) {
+        const groups = input.split(".");
+        if (groups.length !== constants2.GROUPS) {
+          throw new address_error_1.AddressError("Wildcard pattern must have 4 octets");
+        }
+        let firstWildcard = -1;
+        for (let i = 0; i < groups.length; i++) {
+          if (groups[i] === "*") {
+            if (firstWildcard === -1) {
+              firstWildcard = i;
+            }
+          } else if (firstWildcard !== -1) {
+            throw new address_error_1.AddressError("Wildcard `*` must only appear in trailing octets (e.g. `192.168.0.*`)");
+          }
+        }
+        const trailing = firstWildcard === -1 ? 0 : groups.length - firstWildcard;
+        const replaced = groups.map((g) => g === "*" ? "0" : g);
+        const subnetBits = constants2.BITS - trailing * 8;
+        return new _Address4(`${replaced.join(".")}/${subnetBits}`);
+      }
+      /**
+       * Converts a hex string to an IPv4 address object. Accepts 8 hex digits
+       * with optional `:` separators (e.g. `'7f000001'` or `'7f:00:00:01'`).
+       * Throws `AddressError` for any other length or for non-hex characters.
        * @param {string} hex - a hex string to convert
        * @returns {Address4}
        */
       static fromHex(hex) {
-        const padded = hex.replace(/:/g, "").padStart(8, "0");
+        const stripped = hex.replace(/:/g, "");
+        if (!/^[0-9a-fA-F]{8}$/.test(stripped)) {
+          throw new address_error_1.AddressError("IPv4 hex must be exactly 8 hex digits");
+        }
         const groups = [];
-        let i;
-        for (i = 0; i < 8; i += 2) {
-          const h = padded.slice(i, i + 2);
-          groups.push(parseInt(h, 16));
+        for (let i = 0; i < 8; i += 2) {
+          groups.push(parseInt(stripped.slice(i, i + 2), 16));
         }
         return new _Address4(groups.join("."));
       }
       /**
-       * Converts an integer into a IPv4 address object
-       * @memberof Address4
-       * @static
+       * Converts an integer into a IPv4 address object. The integer must be a
+       * non-negative safe integer in the range `[0, 2**32 - 1]`; otherwise
+       * `AddressError` is thrown.
        * @param {integer} integer - a number to convert
        * @returns {Address4}
        */
       static fromInteger(integer) {
-        return _Address4.fromHex(integer.toString(16));
+        if (!Number.isInteger(integer) || integer < 0 || integer > 4294967295) {
+          throw new address_error_1.AddressError("IPv4 integer must be in the range 0 to 2**32 - 1");
+        }
+        return _Address4.fromHex(integer.toString(16).padStart(8, "0"));
       }
       /**
        * Return an address from in-addr.arpa form
-       * @memberof Address4
-       * @static
        * @param {string} arpaFormAddress - an 'in-addr.arpa' form ipv4 address
        * @returns {Adress4}
        * @example
@@ -5341,17 +5652,15 @@ var require_ipv4 = __commonJS({
       }
       /**
        * Converts an IPv4 address object to a hex string
-       * @memberof Address4
-       * @instance
        * @returns {String}
        */
       toHex() {
         return this.parsedAddress.map((part) => common.stringToPaddedHex(part)).join(":");
       }
       /**
-       * Converts an IPv4 address object to an array of bytes
-       * @memberof Address4
-       * @instance
+       * Converts an IPv4 address object to an array of bytes.
+       *
+       * To get a Node.js `Buffer`, wrap the result: `Buffer.from(address.toArray())`.
        * @returns {Array}
        */
       toArray() {
@@ -5359,22 +5668,18 @@ var require_ipv4 = __commonJS({
       }
       /**
        * Converts an IPv4 address object to an IPv6 address group
-       * @memberof Address4
-       * @instance
        * @returns {String}
        */
       toGroup6() {
         const output = [];
         let i;
-        for (i = 0; i < constants.GROUPS; i += 2) {
+        for (i = 0; i < constants2.GROUPS; i += 2) {
           output.push(`${common.stringToPaddedHex(this.parsedAddress[i])}${common.stringToPaddedHex(this.parsedAddress[i + 1])}`);
         }
         return output.join(":");
       }
       /**
        * Returns the address as a `bigint`
-       * @memberof Address4
-       * @instance
        * @returns {bigint}
        */
       bigInt() {
@@ -5382,18 +5687,14 @@ var require_ipv4 = __commonJS({
       }
       /**
        * Helper function getting start address.
-       * @memberof Address4
-       * @instance
        * @returns {bigint}
        */
       _startAddress() {
-        return BigInt(`0b${this.mask() + "0".repeat(constants.BITS - this.subnetMask)}`);
+        return BigInt(`0b${this.mask() + "0".repeat(constants2.BITS - this.subnetMask)}`);
       }
       /**
        * The first address in the range given by this address' subnet.
        * Often referred to as the Network Address.
-       * @memberof Address4
-       * @instance
        * @returns {Address4}
        */
       startAddress() {
@@ -5402,8 +5703,6 @@ var require_ipv4 = __commonJS({
       /**
        * The first host address in the range given by this address's subnet ie
        * the first address after the Network Address
-       * @memberof Address4
-       * @instance
        * @returns {Address4}
        */
       startAddressExclusive() {
@@ -5412,18 +5711,14 @@ var require_ipv4 = __commonJS({
       }
       /**
        * Helper function getting end address.
-       * @memberof Address4
-       * @instance
        * @returns {bigint}
        */
       _endAddress() {
-        return BigInt(`0b${this.mask() + "1".repeat(constants.BITS - this.subnetMask)}`);
+        return BigInt(`0b${this.mask() + "1".repeat(constants2.BITS - this.subnetMask)}`);
       }
       /**
        * The last address in the range given by this address' subnet
        * Often referred to as the Broadcast
-       * @memberof Address4
-       * @instance
        * @returns {Address4}
        */
       endAddress() {
@@ -5432,8 +5727,6 @@ var require_ipv4 = __commonJS({
       /**
        * The last host address in the range given by this address's subnet ie
        * the last address prior to the Broadcast Address
-       * @memberof Address4
-       * @instance
        * @returns {Address4}
        */
       endAddressExclusive() {
@@ -5441,20 +5734,76 @@ var require_ipv4 = __commonJS({
         return _Address4.fromBigInt(this._endAddress() - adjust);
       }
       /**
-       * Converts a BigInt to a v4 address object
-       * @memberof Address4
-       * @static
+       * The dotted-decimal form of the subnet mask, e.g. `255.255.240.0` for
+       * a `/20`. Returns an `Address4`; call `.correctForm()` for the string.
+       * @returns {Address4}
+       */
+      subnetMaskAddress() {
+        return _Address4.fromBigInt(BigInt(`0b${"1".repeat(this.subnetMask)}${"0".repeat(constants2.BITS - this.subnetMask)}`));
+      }
+      /**
+       * The Cisco-style wildcard mask, e.g. `0.0.0.255` for a `/24`. This is
+       * the bitwise inverse of `subnetMaskAddress()`. Returns an `Address4`;
+       * call `.correctForm()` for the string.
+       * @returns {Address4}
+       */
+      wildcardMask() {
+        return _Address4.fromBigInt(BigInt(`0b${"0".repeat(this.subnetMask)}${"1".repeat(constants2.BITS - this.subnetMask)}`));
+      }
+      /**
+       * The network address in CIDR string form, e.g. `192.168.1.0/24` for
+       * `192.168.1.5/24`. For an address with no explicit subnet the prefix is
+       * `/32`, e.g. `networkForm()` on `192.168.1.5` returns `192.168.1.5/32`.
+       * @returns {string}
+       */
+      networkForm() {
+        return `${this.startAddress().correctForm()}/${this.subnetMask}`;
+      }
+      /**
+       * Converts a BigInt to a v4 address object. The value must be in the
+       * range `[0, 2**32 - 1]`; otherwise `AddressError` is thrown.
        * @param {bigint} bigInt - a BigInt to convert
        * @returns {Address4}
        */
       static fromBigInt(bigInt) {
-        return _Address4.fromHex(bigInt.toString(16));
+        if (bigInt < 0n || bigInt > 0xffffffffn) {
+          throw new address_error_1.AddressError("IPv4 BigInt must be in the range 0 to 2**32 - 1");
+        }
+        return _Address4.fromHex(bigInt.toString(16).padStart(8, "0"));
+      }
+      /**
+       * Convert a byte array to an Address4 object.
+       *
+       * To convert from a Node.js `Buffer`, spread it: `Address4.fromByteArray([...buf])`.
+       * @param {Array<number>} bytes - an array of 4 bytes (0-255)
+       * @returns {Address4}
+       */
+      static fromByteArray(bytes) {
+        if (bytes.length !== 4) {
+          throw new address_error_1.AddressError("IPv4 addresses require exactly 4 bytes");
+        }
+        for (let i = 0; i < bytes.length; i++) {
+          if (!Number.isInteger(bytes[i]) || bytes[i] < 0 || bytes[i] > 255) {
+            throw new address_error_1.AddressError("All bytes must be integers between 0 and 255");
+          }
+        }
+        return this.fromUnsignedByteArray(bytes);
+      }
+      /**
+       * Convert an unsigned byte array to an Address4 object
+       * @param {Array<number>} bytes - an array of 4 unsigned bytes (0-255)
+       * @returns {Address4}
+       */
+      static fromUnsignedByteArray(bytes) {
+        if (bytes.length !== 4) {
+          throw new address_error_1.AddressError("IPv4 addresses require exactly 4 bytes");
+        }
+        const address = bytes.join(".");
+        return new _Address4(address);
       }
       /**
        * Returns the first n bits of the address, defaulting to the
        * subnet mask
-       * @memberof Address4
-       * @instance
        * @returns {String}
        */
       mask(mask) {
@@ -5465,8 +5814,6 @@ var require_ipv4 = __commonJS({
       }
       /**
        * Returns the bits in the given range as a base-2 string
-       * @memberof Address4
-       * @instance
        * @returns {string}
        */
       getBitsBase2(start, end) {
@@ -5474,10 +5821,8 @@ var require_ipv4 = __commonJS({
       }
       /**
        * Return the reversed ip6.arpa form of the address
-       * @memberof Address4
        * @param {Object} options
        * @param {boolean} options.omitSuffix - omit the "in-addr.arpa" suffix
-       * @instance
        * @returns {String}
        */
       reverseForm(options) {
@@ -5492,21 +5837,62 @@ var require_ipv4 = __commonJS({
       }
       /**
        * Returns true if the given address is a multicast address
-       * @memberof Address4
-       * @instance
        * @returns {boolean}
        */
       isMulticast() {
-        return this.isInSubnet(new _Address4("224.0.0.0/4"));
+        return this.isInSubnet(MULTICAST_V4);
+      }
+      /**
+       * Returns true if the address is in one of the [RFC 1918](https://datatracker.ietf.org/doc/html/rfc1918) private address ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`).
+       * @returns {boolean}
+       */
+      isPrivate() {
+        return PRIVATE_V4.some((subnet) => this.isInSubnet(subnet));
+      }
+      /**
+       * Returns true if the address is in the loopback range `127.0.0.0/8` ([RFC 1122](https://datatracker.ietf.org/doc/html/rfc1122)).
+       * @returns {boolean}
+       */
+      isLoopback() {
+        return this.isInSubnet(LOOPBACK_V4);
+      }
+      /**
+       * Returns true if the address is in the link-local range `169.254.0.0/16` ([RFC 3927](https://datatracker.ietf.org/doc/html/rfc3927)).
+       * @returns {boolean}
+       */
+      isLinkLocal() {
+        return this.isInSubnet(LINK_LOCAL_V4);
+      }
+      /**
+       * Returns true if the address is the unspecified address `0.0.0.0`.
+       * @returns {boolean}
+       */
+      isUnspecified() {
+        return this.isInSubnet(UNSPECIFIED_V4);
+      }
+      /**
+       * Returns true if the address is the limited broadcast address `255.255.255.255` ([RFC 919](https://datatracker.ietf.org/doc/html/rfc919)).
+       * @returns {boolean}
+       */
+      isBroadcast() {
+        return this.isInSubnet(BROADCAST_V4);
+      }
+      /**
+       * Returns true if the address is in the carrier-grade NAT range `100.64.0.0/10` ([RFC 6598](https://datatracker.ietf.org/doc/html/rfc6598)).
+       * @returns {boolean}
+       */
+      isCGNAT() {
+        return this.isInSubnet(CGNAT_V4);
       }
       /**
        * Returns a zero-padded base-2 string representation of the address
-       * @memberof Address4
-       * @instance
        * @returns {string}
        */
       binaryZeroPad() {
-        return this.bigInt().toString(2).padStart(constants.BITS, "0");
+        if (this._binaryZeroPad === void 0) {
+          this._binaryZeroPad = this.bigInt().toString(2).padStart(constants2.BITS, "0");
+        }
+        return this._binaryZeroPad;
       }
       /**
        * Groups an IPv4 address for inclusion at the end of an IPv6 address
@@ -5514,10 +5900,21 @@ var require_ipv4 = __commonJS({
        */
       groupForV6() {
         const segments = this.parsedAddress;
-        return this.address.replace(constants.RE_ADDRESS, `<span class="hover-group group-v4 group-6">${segments.slice(0, 2).join(".")}</span>.<span class="hover-group group-v4 group-7">${segments.slice(2, 4).join(".")}</span>`);
+        return this.address.replace(constants2.RE_ADDRESS, `<span class="hover-group group-v4 group-6">${segments.slice(0, 2).join(".")}</span>.<span class="hover-group group-v4 group-7">${segments.slice(2, 4).join(".")}</span>`);
       }
     };
     exports.Address4 = Address4;
+    var MULTICAST_V4 = new Address4("224.0.0.0/4");
+    var PRIVATE_V4 = [
+      new Address4("10.0.0.0/8"),
+      new Address4("172.16.0.0/12"),
+      new Address4("192.168.0.0/16")
+    ];
+    var LOOPBACK_V4 = new Address4("127.0.0.0/8");
+    var LINK_LOCAL_V4 = new Address4("169.254.0.0/16");
+    var UNSPECIFIED_V4 = new Address4("0.0.0.0/32");
+    var BROADCAST_V4 = new Address4("255.255.255.255/32");
+    var CGNAT_V4 = new Address4("100.64.0.0/10");
   }
 });
 
@@ -5561,7 +5958,12 @@ var require_constants2 = __commonJS({
       "::/128": "Unspecified",
       "::1/128": "Loopback",
       "ff00::/8": "Multicast",
-      "fe80::/10": "Link-local unicast"
+      "fe80::/10": "Link-local unicast",
+      "fc00::/7": "Unique local",
+      "2002::/16": "6to4",
+      "2001:db8::/32": "Documentation",
+      "64:ff9b::/96": "NAT64 (well-known)",
+      "64:ff9b:1::/48": "NAT64 (local-use)"
     };
     exports.RE_BAD_CHARACTERS = /([^0-9a-f:/%])/gi;
     exports.RE_BAD_ADDRESS = /([0-9a-f]{5,}|:{3,}|[^:]:$|^:[^:]|\/$)/gi;
@@ -5577,19 +5979,23 @@ var require_helpers = __commonJS({
   "node_modules/ip-address/dist/v6/helpers.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    exports.escapeHtml = escapeHtml;
     exports.spanAllZeroes = spanAllZeroes;
     exports.spanAll = spanAll;
     exports.spanLeadingZeroes = spanLeadingZeroes;
     exports.simpleGroup = simpleGroup;
+    function escapeHtml(s) {
+      return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
     function spanAllZeroes(s) {
-      return s.replace(/(0+)/g, '<span class="zero">$1</span>');
+      return escapeHtml(s).replace(/(0+)/g, '<span class="zero">$1</span>');
     }
     function spanAll(s, offset = 0) {
       const letters = s.split("");
-      return letters.map((n, i) => `<span class="digit value-${n} position-${i + offset}">${spanAllZeroes(n)}</span>`).join("");
+      return letters.map((n, i) => `<span class="digit value-${escapeHtml(n)} position-${i + offset}">${spanAllZeroes(n)}</span>`).join("");
     }
     function spanLeadingZeroesSimple(group) {
-      return group.replace(/^(0+)/, '<span class="zero">$1</span>');
+      return escapeHtml(group).replace(/^(0+)/, '<span class="zero">$1</span>');
     }
     function spanLeadingZeroes(address) {
       const groups = address.split(":");
@@ -5740,6 +6146,7 @@ var require_ipv6 = __commonJS({
     var regular_expressions_1 = require_regular_expressions();
     var address_error_1 = require_address_error();
     var common_1 = require_common();
+    var isCorrect6 = common.isCorrect(constants6.BITS);
     function assert(condition) {
       if (!condition) {
         throw new Error("Assertion failed.");
@@ -5785,7 +6192,7 @@ var require_ipv6 = __commonJS({
         this.v4 = false;
         this.zone = "";
         this.isInSubnet = common.isInSubnet;
-        this.isCorrect = common.isCorrect(constants6.BITS);
+        this.isCorrect = isCorrect6;
         if (optionalGroups === void 0) {
           this.groups = constants6.GROUPS;
         } else {
@@ -5812,6 +6219,13 @@ var require_ipv6 = __commonJS({
         this.addressMinusSuffix = address;
         this.parsedAddress = this.parse(this.addressMinusSuffix);
       }
+      /**
+       * Returns true if the given string is a valid IPv6 address (with optional
+       * CIDR subnet and zone identifier), false otherwise. Host bits in the
+       * subnet portion are allowed (e.g. `2001:db8::1/32` is valid); for strict
+       * network-address validation compare `correctForm()` to
+       * `startAddress().correctForm()`, or use `networkForm()`.
+       */
       static isValid(address) {
         try {
           new _Address6(address);
@@ -5821,9 +6235,8 @@ var require_ipv6 = __commonJS({
         }
       }
       /**
-       * Convert a BigInt to a v6 address object
-       * @memberof Address6
-       * @static
+       * Convert a BigInt to a v6 address object. The value must be in the
+       * range `[0, 2**128 - 1]`; otherwise `AddressError` is thrown.
        * @param {bigint} bigInt - a BigInt to convert
        * @returns {Address6}
        * @example
@@ -5832,19 +6245,21 @@ var require_ipv6 = __commonJS({
        * address.correctForm(); // '::e8:d4a5:1000'
        */
       static fromBigInt(bigInt) {
+        if (bigInt < 0n || bigInt > (1n << BigInt(constants6.BITS)) - 1n) {
+          throw new address_error_1.AddressError("IPv6 BigInt must be in the range 0 to 2**128 - 1");
+        }
         const hex = bigInt.toString(16).padStart(32, "0");
         const groups = [];
-        let i;
-        for (i = 0; i < constants6.GROUPS; i++) {
+        for (let i = 0; i < constants6.GROUPS; i++) {
           groups.push(hex.slice(i * 4, (i + 1) * 4));
         }
         return new _Address6(groups.join(":"));
       }
       /**
-       * Convert a URL (with optional port number) to an address object
-       * @memberof Address6
-       * @static
-       * @param {string} url - a URL with optional port number
+       * Parse a URL (with optional bracketed host and port) into an address and
+       * port. Returns either `{ address, port }` on success or
+       * `{ error, address: null, port: null }` if the URL could not be parsed.
+       * Ports are returned as numbers (or `null` if absent or out of range).
        * @example
        * var addressAndPort = Address6.fromURL('http://[ffff::]:8080/foo/');
        * addressAndPort.address.correctForm(); // 'ffff::'
@@ -5893,9 +6308,88 @@ var require_ipv6 = __commonJS({
         };
       }
       /**
+       * Construct an `Address6` from an address and a hex subnet mask given as
+       * separate strings (e.g. as returned by Node's `os.networkInterfaces()`).
+       * Throws `AddressError` if the mask is non-contiguous (e.g.
+       * `ffff::ffff`).
+       * @example
+       * var address = Address6.fromAddressAndMask('fe80::1', 'ffff:ffff:ffff:ffff::');
+       * address.subnetMask; // 64
+       */
+      static fromAddressAndMask(address, mask) {
+        const bits = common.prefixLengthFromMask(new _Address6(mask).bigInt(), constants6.BITS);
+        return new _Address6(`${address}/${bits}`);
+      }
+      /**
+       * Construct an `Address6` from an address and a Cisco-style wildcard mask
+       * given as separate strings (e.g. `::ffff:ffff:ffff:ffff` for a `/64`).
+       * The wildcard mask is the bitwise inverse of the subnet mask. Throws
+       * `AddressError` if the mask is non-contiguous.
+       * @example
+       * var address = Address6.fromAddressAndWildcardMask('fe80::1', '::ffff:ffff:ffff:ffff');
+       * address.subnetMask; // 64
+       */
+      static fromAddressAndWildcardMask(address, wildcardMask) {
+        const wildcard = new _Address6(wildcardMask).bigInt();
+        const allOnes = (BigInt(1) << BigInt(constants6.BITS)) - BigInt(1);
+        const mask = wildcard ^ allOnes;
+        const bits = common.prefixLengthFromMask(mask, constants6.BITS);
+        return new _Address6(`${address}/${bits}`);
+      }
+      /**
+       * Construct an `Address6` from a wildcard pattern with trailing `*`
+       * groups. The number of trailing wildcards determines the prefix
+       * length: each `*` represents 16 bits. `::` is expanded to zero groups
+       * (not wildcards) before evaluating trailing wildcards.
+       *
+       * Only trailing whole-group wildcards are supported. Partial-group
+       * wildcards (e.g. `2001:db8::0*`) and interior wildcards (e.g.
+       * `*::1`) throw `AddressError`.
+       * @example
+       * Address6.fromWildcard('2001:db8:*:*:*:*:*:*').subnet;  // '/32'
+       * Address6.fromWildcard('2001:db8::*').subnet;           // '/112'
+       * Address6.fromWildcard('*:*:*:*:*:*:*:*').subnet;       // '/0'
+       */
+      static fromWildcard(input) {
+        if (input.includes("%") || input.includes("/")) {
+          throw new address_error_1.AddressError("Wildcard pattern must not include a zone or CIDR suffix");
+        }
+        const halves = input.split("::");
+        if (halves.length > 2) {
+          throw new address_error_1.AddressError("Wildcard pattern cannot contain more than one '::'");
+        }
+        let groups;
+        if (halves.length === 2) {
+          const left = halves[0] === "" ? [] : halves[0].split(":");
+          const right = halves[1] === "" ? [] : halves[1].split(":");
+          const remaining = constants6.GROUPS - left.length - right.length;
+          if (remaining < 1) {
+            throw new address_error_1.AddressError("Wildcard pattern with '::' has too many groups");
+          }
+          groups = [...left, ...new Array(remaining).fill("0"), ...right];
+        } else {
+          groups = input.split(":");
+        }
+        if (groups.length !== constants6.GROUPS) {
+          throw new address_error_1.AddressError("Wildcard pattern must have 8 groups");
+        }
+        let firstWildcard = -1;
+        for (let i = 0; i < groups.length; i++) {
+          if (groups[i] === "*") {
+            if (firstWildcard === -1) {
+              firstWildcard = i;
+            }
+          } else if (firstWildcard !== -1) {
+            throw new address_error_1.AddressError("Wildcard `*` must only appear in trailing groups (e.g. `2001:db8:*:*:*:*:*:*`)");
+          }
+        }
+        const trailing = firstWildcard === -1 ? 0 : groups.length - firstWildcard;
+        const replaced = groups.map((g) => g === "*" ? "0" : g);
+        const subnetBits = constants6.BITS - trailing * 16;
+        return new _Address6(`${replaced.join(":")}/${subnetBits}`);
+      }
+      /**
        * Create an IPv6-mapped address given an IPv4 address
-       * @memberof Address6
-       * @static
        * @param {string} address - An IPv4 address string
        * @returns {Address6}
        * @example
@@ -5910,8 +6404,6 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Return an address from ip6.arpa form
-       * @memberof Address6
-       * @static
        * @param {string} arpaFormAddress - an 'ip6.arpa' form address
        * @returns {Adress6}
        * @example
@@ -5934,8 +6426,6 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Return the Microsoft UNC transcription of the address
-       * @memberof Address6
-       * @instance
        * @returns {String} the Microsoft UNC transcription of the address
        */
       microsoftTranscription() {
@@ -5943,8 +6433,6 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Return the first n bits of the address, defaulting to the subnet mask
-       * @memberof Address6
-       * @instance
        * @param {number} [mask=subnet] - the number of bits to mask
        * @returns {String} the first n bits of the address as a string
        */
@@ -5953,8 +6441,6 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Return the number of possible subnets of a given size in the address
-       * @memberof Address6
-       * @instance
        * @param {number} [subnetSize=128] - the subnet size
        * @returns {String}
        */
@@ -5970,8 +6456,6 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Helper function getting start address.
-       * @memberof Address6
-       * @instance
        * @returns {bigint}
        */
       _startAddress() {
@@ -5980,8 +6464,6 @@ var require_ipv6 = __commonJS({
       /**
        * The first address in the range given by this address' subnet
        * Often referred to as the Network Address.
-       * @memberof Address6
-       * @instance
        * @returns {Address6}
        */
       startAddress() {
@@ -5990,8 +6472,6 @@ var require_ipv6 = __commonJS({
       /**
        * The first host address in the range given by this address's subnet ie
        * the first address after the Network Address
-       * @memberof Address6
-       * @instance
        * @returns {Address6}
        */
       startAddressExclusive() {
@@ -6000,8 +6480,6 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Helper function getting end address.
-       * @memberof Address6
-       * @instance
        * @returns {bigint}
        */
       _endAddress() {
@@ -6010,8 +6488,6 @@ var require_ipv6 = __commonJS({
       /**
        * The last address in the range given by this address' subnet
        * Often referred to as the Broadcast
-       * @memberof Address6
-       * @instance
        * @returns {Address6}
        */
       endAddress() {
@@ -6020,8 +6496,6 @@ var require_ipv6 = __commonJS({
       /**
        * The last host address in the range given by this address's subnet ie
        * the last address prior to the Broadcast Address
-       * @memberof Address6
-       * @instance
        * @returns {Address6}
        */
       endAddressExclusive() {
@@ -6029,36 +6503,69 @@ var require_ipv6 = __commonJS({
         return _Address6.fromBigInt(this._endAddress() - adjust);
       }
       /**
-       * Return the scope of the address
-       * @memberof Address6
-       * @instance
+       * The hex form of the subnet mask, e.g. `ffff:ffff:ffff:ffff::` for a
+       * `/64`. Returns an `Address6`; call `.correctForm()` for the string.
+       * @returns {Address6}
+       */
+      subnetMaskAddress() {
+        return _Address6.fromBigInt(BigInt(`0b${"1".repeat(this.subnetMask)}${"0".repeat(constants6.BITS - this.subnetMask)}`));
+      }
+      /**
+       * The Cisco-style wildcard mask, e.g. `::ffff:ffff:ffff:ffff` for a
+       * `/64`. This is the bitwise inverse of `subnetMaskAddress()`. Returns
+       * an `Address6`; call `.correctForm()` for the string.
+       * @returns {Address6}
+       */
+      wildcardMask() {
+        return _Address6.fromBigInt(BigInt(`0b${"0".repeat(this.subnetMask)}${"1".repeat(constants6.BITS - this.subnetMask)}`));
+      }
+      /**
+       * The network address in CIDR string form, e.g. `2001:db8::/32` for
+       * `2001:db8::1/32`. For an address with no explicit subnet the prefix
+       * is `/128`, e.g. `networkForm()` on `2001:db8::1` returns
+       * `2001:db8::1/128`.
+       * @returns {string}
+       */
+      networkForm() {
+        return `${this.startAddress().correctForm()}/${this.subnetMask}`;
+      }
+      /**
+       * Return the scope of the address. The 4-bit scope field
+       * ([RFC 4291 §2.7](https://datatracker.ietf.org/doc/html/rfc4291#section-2.7))
+       * is only defined for multicast addresses; for unicast addresses the scope
+       * is derived from the address type per
+       * [RFC 4007 §6](https://datatracker.ietf.org/doc/html/rfc4007#section-6).
        * @returns {String}
        */
       getScope() {
-        let scope = constants6.SCOPES[parseInt(this.getBits(12, 16).toString(10), 10)];
-        if (this.getType() === "Global unicast" && scope !== "Link local") {
-          scope = "Global";
+        const type = this.getType();
+        if (type === "Multicast" || type.startsWith("Multicast ")) {
+          const scope = constants6.SCOPES[parseInt(this.getBits(12, 16).toString(10), 10)];
+          return scope || "Unknown";
         }
-        return scope || "Unknown";
+        if (type === "Link-local unicast" || type === "Loopback") {
+          return "Link local";
+        }
+        if (type === "Unspecified") {
+          return "Unknown";
+        }
+        return "Global";
       }
       /**
        * Return the type of the address
-       * @memberof Address6
-       * @instance
        * @returns {String}
        */
       getType() {
-        for (const subnet of Object.keys(constants6.TYPES)) {
-          if (this.isInSubnet(new _Address6(subnet))) {
-            return constants6.TYPES[subnet];
+        for (let i = 0; i < TYPE_SUBNETS.length; i++) {
+          const entry = TYPE_SUBNETS[i];
+          if (this.isInSubnet(entry[0])) {
+            return entry[1];
           }
         }
         return "Global unicast";
       }
       /**
        * Return the bits in the given range as a BigInt
-       * @memberof Address6
-       * @instance
        * @returns {bigint}
        */
       getBits(start, end) {
@@ -6066,8 +6573,6 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Return the bits in the given range as a base-2 string
-       * @memberof Address6
-       * @instance
        * @returns {String}
        */
       getBitsBase2(start, end) {
@@ -6075,8 +6580,6 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Return the bits in the given range as a base-16 string
-       * @memberof Address6
-       * @instance
        * @returns {String}
        */
       getBitsBase16(start, end) {
@@ -6088,8 +6591,6 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Return the bits that are set past the subnet mask length
-       * @memberof Address6
-       * @instance
        * @returns {String}
        */
       getBitsPastSubnet() {
@@ -6097,10 +6598,8 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Return the reversed ip6.arpa form of the address
-       * @memberof Address6
        * @param {Object} options
        * @param {boolean} options.omitSuffix - omit the "ip6.arpa" suffix
-       * @instance
        * @returns {String}
        */
       reverseForm(options) {
@@ -6121,10 +6620,10 @@ var require_ipv6 = __commonJS({
         return "ip6.arpa.";
       }
       /**
-       * Return the correct form of the address
-       * @memberof Address6
-       * @instance
-       * @returns {String}
+       * Returns the address in correct form, per
+       * [RFC 5952](https://datatracker.ietf.org/doc/html/rfc5952): leading zeros
+       * stripped, the longest run of zero groups collapsed to `::`, and hex digits
+       * lowercased (e.g. `2001:db8::1`). This is the recommended form for display.
        */
       correctForm() {
         let i;
@@ -6166,8 +6665,6 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Return a zero-padded base-2 string representation of the address
-       * @memberof Address6
-       * @instance
        * @returns {String}
        * @example
        * var address = new Address6('2001:4860:4001:803::1011');
@@ -6176,10 +6673,22 @@ var require_ipv6 = __commonJS({
        * //  0000000000000000000000000000000000000000000000000001000000010001'
        */
       binaryZeroPad() {
-        return this.bigInt().toString(2).padStart(constants6.BITS, "0");
+        if (this._binaryZeroPad === void 0) {
+          this._binaryZeroPad = this.bigInt().toString(2).padStart(constants6.BITS, "0");
+        }
+        return this._binaryZeroPad;
       }
+      /**
+       * Parses a v4-in-v6 string (e.g. `::ffff:192.168.0.1`) by extracting the
+       * trailing IPv4 address into `this.address4` / `this.parsedAddress4` and
+       * returning the address with the v4 portion converted to two v6 groups.
+       * Used internally by `parse()`.
+       */
       // TODO: Improve the semantics of this helper function
       parse4in6(address) {
+        if (address.indexOf(".") === -1) {
+          return address;
+        }
         const groups = address.split(":");
         const lastGroup = groups.slice(-1)[0];
         const address4 = lastGroup.match(constants4.RE_ADDRESS);
@@ -6188,7 +6697,10 @@ var require_ipv6 = __commonJS({
           this.address4 = new ipv4_1.Address4(this.parsedAddress4);
           for (let i = 0; i < this.address4.groups; i++) {
             if (/^0[0-9]+/.test(this.address4.parsedAddress[i])) {
-              throw new address_error_1.AddressError("IPv4 addresses can't have leading zeroes.", address.replace(constants4.RE_ADDRESS, this.address4.parsedAddress.map(spanLeadingZeroes4).join(".")));
+              const highlighted = this.address4.parsedAddress.map(spanLeadingZeroes4).join(".");
+              const prefix = groups.slice(0, -1).map(helpers.escapeHtml).join(":");
+              const separator = groups.length > 1 ? ":" : "";
+              throw new address_error_1.AddressError("IPv4 addresses can't have leading zeroes.", `${prefix}${separator}${highlighted}`);
             }
           }
           this.v4 = true;
@@ -6197,6 +6709,13 @@ var require_ipv6 = __commonJS({
         }
         return address;
       }
+      /**
+       * Parses an IPv6 address string into its 8 hexadecimal groups (expanding
+       * any `::` elision and any trailing v4-in-v6 portion) and stores the result
+       * on `this.parsedAddress`. Called automatically by the constructor; you
+       * typically don't need to call it directly. Throws `AddressError` if the
+       * input is malformed.
+       */
       // TODO: Make private?
       parse(address) {
         address = this.parse4in6(address);
@@ -6244,18 +6763,16 @@ var require_ipv6 = __commonJS({
         return groups;
       }
       /**
-       * Return the canonical form of the address
-       * @memberof Address6
-       * @instance
-       * @returns {String}
+       * Returns the canonical (fully expanded) form of the address: all 8 groups,
+       * each padded to 4 hex digits, with no `::` collapsing
+       * (e.g. `2001:0db8:0000:0000:0000:0000:0000:0001`). Useful for sorting and
+       * byte-exact comparison.
        */
       canonicalForm() {
         return this.parsedAddress.map(paddedHex).join(":");
       }
       /**
        * Return the decimal form of the address
-       * @memberof Address6
-       * @instance
        * @returns {String}
        */
       decimal() {
@@ -6263,8 +6780,6 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Return the address as a BigInt
-       * @memberof Address6
-       * @instance
        * @returns {bigint}
        */
       bigInt() {
@@ -6272,8 +6787,6 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Return the last two groups of this address as an IPv4 address string
-       * @memberof Address6
-       * @instance
        * @returns {Address4}
        * @example
        * var address = new Address6('2001:4860:4001::1825:bf11');
@@ -6281,12 +6794,10 @@ var require_ipv6 = __commonJS({
        */
       to4() {
         const binary = this.binaryZeroPad().split("");
-        return ipv4_1.Address4.fromHex(BigInt(`0b${binary.slice(96, 128).join("")}`).toString(16));
+        return ipv4_1.Address4.fromHex(BigInt(`0b${binary.slice(96, 128).join("")}`).toString(16).padStart(8, "0"));
       }
       /**
        * Return the v4-in-v6 form of the address
-       * @memberof Address6
-       * @instance
        * @returns {String}
        */
       to4in6() {
@@ -6300,10 +6811,10 @@ var require_ipv6 = __commonJS({
         return correct + infix + address4.address;
       }
       /**
-       * Return an object containing the Teredo properties of the address
-       * @memberof Address6
-       * @instance
-       * @returns {Object}
+       * Decodes the Teredo tunneling fields embedded in this address. Returns the
+       * Teredo prefix, server IPv4, client IPv4, raw flag bits, cone-NAT flag,
+       * UDP port, and Microsoft-format flag breakdown (reserved, universal/local,
+       * group/individual, nonce). Only meaningful for addresses in `2001::/32`.
        */
       inspectTeredo() {
         const prefix = this.getBitsBase16(0, 32);
@@ -6311,7 +6822,7 @@ var require_ipv6 = __commonJS({
         const udpPort = (bitsForUdpPort ^ BigInt("0xffff")).toString();
         const server4 = ipv4_1.Address4.fromHex(this.getBitsBase16(32, 64));
         const bitsForClient4 = this.getBits(96, 128);
-        const client4 = ipv4_1.Address4.fromHex((bitsForClient4 ^ BigInt("0xffffffff")).toString(16));
+        const client4 = ipv4_1.Address4.fromHex((bitsForClient4 ^ BigInt("0xffffffff")).toString(16).padStart(8, "0"));
         const flagsBase2 = this.getBitsBase2(64, 80);
         const coneNat = (0, common_1.testBit)(flagsBase2, 15);
         const reserved = (0, common_1.testBit)(flagsBase2, 14);
@@ -6334,10 +6845,9 @@ var require_ipv6 = __commonJS({
         };
       }
       /**
-       * Return an object containing the 6to4 properties of the address
-       * @memberof Address6
-       * @instance
-       * @returns {Object}
+       * Decodes the 6to4 tunneling fields embedded in this address. Returns the
+       * 6to4 prefix and the embedded IPv4 gateway address. Only meaningful for
+       * addresses in `2002::/16`.
        */
       inspect6to4() {
         const prefix = this.getBitsBase16(0, 16);
@@ -6349,8 +6859,6 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Return a v6 6to4 address from a v6 v4inv6 address
-       * @memberof Address6
-       * @instance
        * @returns {Address6}
        */
       to6to4() {
@@ -6367,9 +6875,73 @@ var require_ipv6 = __commonJS({
         return new _Address6(addr6to4);
       }
       /**
-       * Return a byte array
-       * @memberof Address6
-       * @instance
+       * Embed an IPv4 address into a NAT64 IPv6 address using the encoding
+       * defined by [RFC 6052](https://datatracker.ietf.org/doc/html/rfc6052).
+       * The default prefix is the well-known prefix `64:ff9b::/96`. The prefix
+       * length must be one of 32, 40, 48, 56, 64, or 96; for prefixes shorter
+       * than /64 the IPv4 octets are split around the reserved bits 64–71.
+       * @example
+       * Address6.fromAddress4Nat64('192.0.2.33').correctForm(); // '64:ff9b::c000:221'
+       * Address6.fromAddress4Nat64('192.0.2.33', '2001:db8::/32').correctForm(); // '2001:db8:c000:221::'
+       */
+      static fromAddress4Nat64(address, prefix = "64:ff9b::/96") {
+        const v4 = new ipv4_1.Address4(address);
+        const prefix6 = new _Address6(prefix);
+        const pl = prefix6.subnetMask;
+        if (pl !== 32 && pl !== 40 && pl !== 48 && pl !== 56 && pl !== 64 && pl !== 96) {
+          throw new address_error_1.AddressError("NAT64 prefix length must be 32, 40, 48, 56, 64, or 96");
+        }
+        const prefixBits = prefix6.binaryZeroPad();
+        const v4Bits = v4.binaryZeroPad();
+        let bits;
+        if (pl === 96) {
+          bits = prefixBits.slice(0, 96) + v4Bits;
+        } else {
+          const beforeU = 64 - pl;
+          bits = prefixBits.slice(0, pl) + v4Bits.slice(0, beforeU) + "00000000" + v4Bits.slice(beforeU) + "0".repeat(128 - 72 - (32 - beforeU));
+        }
+        const hex = BigInt(`0b${bits}`).toString(16).padStart(32, "0");
+        const groups = [];
+        for (let i = 0; i < 8; i++) {
+          groups.push(hex.slice(i * 4, (i + 1) * 4));
+        }
+        return new _Address6(groups.join(":"));
+      }
+      /**
+       * Extract the embedded IPv4 address from a NAT64 IPv6 address using the
+       * encoding defined by [RFC 6052](https://datatracker.ietf.org/doc/html/rfc6052).
+       * The default prefix is the well-known prefix `64:ff9b::/96`. Returns
+       * `null` if this address is not contained within the given prefix.
+       * @example
+       * new Address6('64:ff9b::c000:221').toAddress4Nat64()!.correctForm(); // '192.0.2.33'
+       */
+      toAddress4Nat64(prefix = "64:ff9b::/96") {
+        const prefix6 = new _Address6(prefix);
+        const pl = prefix6.subnetMask;
+        if (pl !== 32 && pl !== 40 && pl !== 48 && pl !== 56 && pl !== 64 && pl !== 96) {
+          throw new address_error_1.AddressError("NAT64 prefix length must be 32, 40, 48, 56, 64, or 96");
+        }
+        if (!this.isInSubnet(prefix6)) {
+          return null;
+        }
+        const bits = this.binaryZeroPad();
+        let v4Bits;
+        if (pl === 96) {
+          v4Bits = bits.slice(96, 128);
+        } else {
+          const beforeU = 64 - pl;
+          v4Bits = bits.slice(pl, pl + beforeU) + bits.slice(72, 72 + (32 - beforeU));
+        }
+        const octets = [];
+        for (let i = 0; i < 4; i++) {
+          octets.push(parseInt(v4Bits.slice(i * 8, (i + 1) * 8), 2).toString());
+        }
+        return new ipv4_1.Address4(octets.join("."));
+      }
+      /**
+       * Return a byte array.
+       *
+       * To get a Node.js `Buffer`, wrap the result: `Buffer.from(address.toByteArray())`.
        * @returns {Array}
        */
       toByteArray() {
@@ -6383,27 +6955,27 @@ var require_ipv6 = __commonJS({
         return bytes;
       }
       /**
-       * Return an unsigned byte array
-       * @memberof Address6
-       * @instance
+       * Return an unsigned byte array.
+       *
+       * To get a Node.js `Buffer`, wrap the result: `Buffer.from(address.toUnsignedByteArray())`.
        * @returns {Array}
        */
       toUnsignedByteArray() {
         return this.toByteArray().map(unsignByte);
       }
       /**
-       * Convert a byte array to an Address6 object
-       * @memberof Address6
-       * @static
+       * Convert a byte array to an Address6 object.
+       *
+       * To convert from a Node.js `Buffer`, spread it: `Address6.fromByteArray([...buf])`.
        * @returns {Address6}
        */
       static fromByteArray(bytes) {
         return this.fromUnsignedByteArray(bytes.map(unsignByte));
       }
       /**
-       * Convert an unsigned byte array to an Address6 object
-       * @memberof Address6
-       * @static
+       * Convert an unsigned byte array to an Address6 object.
+       *
+       * To convert from a Node.js `Buffer`, spread it: `Address6.fromUnsignedByteArray([...buf])`.
        * @returns {Address6}
        */
       static fromUnsignedByteArray(bytes) {
@@ -6418,8 +6990,6 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Returns true if the address is in the canonical form, false otherwise
-       * @memberof Address6
-       * @instance
        * @returns {boolean}
        */
       isCanonical() {
@@ -6427,8 +6997,6 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Returns true if the address is a link local address, false otherwise
-       * @memberof Address6
-       * @instance
        * @returns {boolean}
        */
       isLinkLocal() {
@@ -6439,53 +7007,81 @@ var require_ipv6 = __commonJS({
       }
       /**
        * Returns true if the address is a multicast address, false otherwise
-       * @memberof Address6
-       * @instance
        * @returns {boolean}
        */
       isMulticast() {
-        return this.getType() === "Multicast";
+        const type = this.getType();
+        return type === "Multicast" || type.startsWith("Multicast ");
       }
       /**
-       * Returns true if the address is a v4-in-v6 address, false otherwise
-       * @memberof Address6
-       * @instance
+       * Returns true if the address was written in v4-in-v6 dotted-quad notation
+       * (e.g. `::ffff:127.0.0.1`), false otherwise. This is a notation-level flag
+       * and does not reflect whether the address bits lie in the IPv4-mapped
+       * (`::ffff:0:0/96`) subnet — for that, see {@link isMapped4}.
        * @returns {boolean}
        */
       is4() {
         return this.v4;
       }
       /**
+       * Returns true if the address is an IPv4-mapped IPv6 address in
+       * `::ffff:0:0/96` ([RFC 4291 §2.5.5.2](https://datatracker.ietf.org/doc/html/rfc4291#section-2.5.5.2)),
+       * false otherwise. Unlike {@link is4}, this checks the underlying address
+       * bits rather than the textual notation, so `::ffff:127.0.0.1` and
+       * `::ffff:7f00:1` both return true.
+       * @returns {boolean}
+       */
+      isMapped4() {
+        return this.isInSubnet(IPV4_MAPPED_SUBNET);
+      }
+      /**
        * Returns true if the address is a Teredo address, false otherwise
-       * @memberof Address6
-       * @instance
        * @returns {boolean}
        */
       isTeredo() {
-        return this.isInSubnet(new _Address6("2001::/32"));
+        return this.isInSubnet(TEREDO_SUBNET);
       }
       /**
        * Returns true if the address is a 6to4 address, false otherwise
-       * @memberof Address6
-       * @instance
        * @returns {boolean}
        */
       is6to4() {
-        return this.isInSubnet(new _Address6("2002::/16"));
+        return this.isInSubnet(SIX_TO_FOUR_SUBNET);
       }
       /**
        * Returns true if the address is a loopback address, false otherwise
-       * @memberof Address6
-       * @instance
        * @returns {boolean}
        */
       isLoopback() {
         return this.getType() === "Loopback";
       }
+      /**
+       * Returns true if the address is a Unique Local Address in `fc00::/7` ([RFC 4193](https://datatracker.ietf.org/doc/html/rfc4193)). ULAs are the IPv6 equivalent of IPv4 [RFC 1918](https://datatracker.ietf.org/doc/html/rfc1918) private addresses.
+       * @returns {boolean}
+       */
+      isULA() {
+        return this.isInSubnet(ULA_SUBNET);
+      }
+      /**
+       * Returns true if the address is the unspecified address `::`.
+       * @returns {boolean}
+       */
+      isUnspecified() {
+        return this.getType() === "Unspecified";
+      }
+      /**
+       * Returns true if the address is in the documentation prefix `2001:db8::/32` ([RFC 3849](https://datatracker.ietf.org/doc/html/rfc3849)).
+       * @returns {boolean}
+       */
+      isDocumentation() {
+        return this.isInSubnet(DOCUMENTATION_SUBNET);
+      }
       // #endregion
       // #region HTML
       /**
-       * @returns {String} the address in link form with a default port of 80
+       * Returns the address as an HTTP URL with the host bracketed, e.g.
+       * `http://[2001:db8::1]/`. If `optionalPort` is provided it is appended,
+       * e.g. `http://[2001:db8::1]:8080/`.
        */
       href(optionalPort) {
         if (optionalPort === void 0) {
@@ -6496,7 +7092,12 @@ var require_ipv6 = __commonJS({
         return `http://[${this.correctForm()}]${optionalPort}/`;
       }
       /**
-       * @returns {String} a link suitable for conveying the address via a URL hash
+       * Returns an HTML `<a>` element whose `href` encodes the address in a URL
+       * hash fragment (default prefix `/#address=`). Useful for linking between
+       * pages of an address-inspector UI.
+       * @param options.className - CSS class for the rendered `<a>` element
+       * @param options.prefix - hash prefix prepended to the address (default `/#address=`)
+       * @param options.v4 - when true, render the address in v4-in-v6 form
        */
       link(options) {
         if (!options) {
@@ -6516,10 +7117,13 @@ var require_ipv6 = __commonJS({
           formFunction = this.to4in6;
         }
         const form = formFunction.call(this);
+        const safeHref = helpers.escapeHtml(`${options.prefix}${form}`);
+        const safeForm = helpers.escapeHtml(form);
         if (options.className) {
-          return `<a href="${options.prefix}${form}" class="${options.className}">${form}</a>`;
+          const safeClass = helpers.escapeHtml(options.className);
+          return `<a href="${safeHref}" class="${safeClass}">${safeForm}</a>`;
         }
-        return `<a href="${options.prefix}${form}">${form}</a>`;
+        return `<a href="${safeHref}">${safeForm}</a>`;
       }
       /**
        * Groups an address
@@ -6527,12 +7131,12 @@ var require_ipv6 = __commonJS({
        */
       group() {
         if (this.elidedGroups === 0) {
-          return helpers.simpleGroup(this.address).join(":");
+          return helpers.simpleGroup(this.addressMinusSuffix).join(":");
         }
         assert(typeof this.elidedGroups === "number");
         assert(typeof this.elisionBegin === "number");
         const output = [];
-        const [left, right] = this.address.split("::");
+        const [left, right] = this.addressMinusSuffix.split("::");
         if (left.length) {
           output.push(...helpers.simpleGroup(left));
         } else {
@@ -6560,8 +7164,6 @@ var require_ipv6 = __commonJS({
       /**
        * Generate a regular expression string that can be used to find or validate
        * all variations of this address
-       * @memberof Address6
-       * @instance
        * @param {boolean} substringSearch
        * @returns {string}
        */
@@ -6600,8 +7202,6 @@ var require_ipv6 = __commonJS({
       /**
        * Generate a regular expression that can be used to find or validate all
        * variations of this address.
-       * @memberof Address6
-       * @instance
        * @param {boolean} substringSearch
        * @returns {RegExp}
        */
@@ -6610,6 +7210,15 @@ var require_ipv6 = __commonJS({
       }
     };
     exports.Address6 = Address62;
+    var TYPE_SUBNETS = Object.keys(constants6.TYPES).map((subnet) => [
+      new Address62(subnet),
+      constants6.TYPES[subnet]
+    ]);
+    var TEREDO_SUBNET = new Address62("2001::/32");
+    var SIX_TO_FOUR_SUBNET = new Address62("2002::/16");
+    var ULA_SUBNET = new Address62("fc00::/7");
+    var DOCUMENTATION_SUBNET = new Address62("2001:db8::/32");
+    var IPV4_MAPPED_SUBNET = new Address62("::ffff:0:0/96");
   }
 });
 
@@ -6670,12 +7279,24 @@ import { Buffer as Buffer2 } from "node:buffer";
 import { createHash as createHash4 } from "node:crypto";
 import { isIP } from "node:net";
 function ipKeyGenerator(ip, ipv6Subnet = 56) {
-  if (ipv6Subnet && isIPv6(ip)) {
-    return `${new import_ip_address.Address6(`${ip}/${ipv6Subnet}`).startAddress().correctForm()}/${ipv6Subnet}`;
+  if (isIPv6(ip)) {
+    const address = new import_ip_address.Address6(ip);
+    if (address.is4()) return address.to4().correctForm();
+    if (ipv6Subnet) {
+      const subnet = new import_ip_address.Address6(`${ip}/${ipv6Subnet}`);
+      return `${subnet.startAddress().correctForm()}/${ipv6Subnet}`;
+    }
   }
   return ip;
 }
-var import_ip_address, MemoryStore, SUPPORTED_DRAFT_VERSIONS, getResetSeconds, getPartitionKey, setLegacyHeaders, setDraft6Headers, setDraft7Headers, setDraft8Headers, setRetryAfterHeader, omitUndefinedProperties, ValidationError, ChangeWarning, usedStores, singleCountKeys, validations, getValidations, isLegacyStore, promisifyStore, getOptionsFromConfig, parseOptions, handleAsyncErrors, rateLimit, rate_limit_default;
+function validateLogger(logger38) {
+  if (typeof logger38 !== "object" || typeof logger38.error !== "function" || typeof logger38.warn !== "function") {
+    throw new TypeError(
+      "Provided logger does not implement the Logger interface"
+    );
+  }
+}
+var import_ip_address, MemoryStore, ConsoleLogger, SUPPORTED_DRAFT_VERSIONS, getResetSeconds, getPartitionKey, setLegacyHeaders, setDraft6Headers, setDraft7Headers, setDraft8Headers, setRetryAfterHeader, omitUndefinedProperties, ValidationError, ChangeWarning, usedStores, singleCountKeys, validations, getValidations, isLegacyStore, promisifyStore, getOptionsFromConfig, parseOptions, handleAsyncErrors, rateLimit, rate_limit_default;
 var init_dist5 = __esm({
   "node_modules/express-rate-limit/dist/index.mjs"() {
     import_ip_address = __toESM(require_ip_address(), 1);
@@ -6817,6 +7438,14 @@ var init_dist5 = __esm({
       clearExpired() {
         this.previous = this.current;
         this.current = /* @__PURE__ */ new Map();
+      }
+    };
+    ConsoleLogger = {
+      warn(...args) {
+        console.warn(...args.reverse());
+      },
+      error(...args) {
+        console.error(...args.reverse());
       }
     };
     SUPPORTED_DRAFT_VERSIONS = [
@@ -7158,7 +7787,8 @@ var init_dist5 = __esm({
           validate: true,
           headers: true,
           max: true,
-          passOnStoreError: true
+          passOnStoreError: true,
+          logger: true
         };
         const validOptions = Object.keys(optionsMap).concat(
           "draft_polli_ratelimit_headers",
@@ -7271,7 +7901,8 @@ var init_dist5 = __esm({
         }
       }
     };
-    getValidations = (_enabled) => {
+    getValidations = (_enabled, logger38) => {
+      validateLogger(logger38);
       let enabled;
       if (typeof _enabled === "boolean") {
         enabled = {
@@ -7297,8 +7928,8 @@ var init_dist5 = __esm({
                 args
               );
             } catch (error) {
-              if (error instanceof ChangeWarning) console.warn(error);
-              else console.error(error);
+              if (error instanceof ChangeWarning) logger38.warn(error);
+              else logger38.error(error);
             }
           };
       }
@@ -7316,12 +7947,12 @@ var init_dist5 = __esm({
       const legacyStore = passedStore;
       class PromisifiedStore {
         async increment(key) {
-          return new Promise((resolve24, reject) => {
+          return new Promise((resolve25, reject) => {
             legacyStore.incr(
               key,
               (error, totalHits, resetTime) => {
                 if (error) reject(error);
-                resolve24({ totalHits, resetTime });
+                resolve25({ totalHits, resetTime });
               }
             );
           });
@@ -7349,7 +7980,11 @@ var init_dist5 = __esm({
     };
     parseOptions = (passedOptions) => {
       const notUndefinedOptions = omitUndefinedProperties(passedOptions);
-      const validations2 = getValidations(notUndefinedOptions?.validate ?? true);
+      const logger38 = passedOptions.logger ?? ConsoleLogger;
+      const validations2 = getValidations(
+        notUndefinedOptions?.validate ?? true,
+        logger38
+      );
       validations2.validationsConfig();
       validations2.knownOptions(passedOptions);
       validations2.draftPolliHeaders(
@@ -7424,7 +8059,8 @@ var init_dist5 = __esm({
           notUndefinedOptions.store ?? new MemoryStore(validations2)
         ),
         // Print an error to the console if a few known misconfigurations are detected.
-        validations: validations2
+        validations: validations2,
+        logger: logger38
       };
       if (typeof config9.store.increment !== "function" || typeof config9.store.decrement !== "function" || typeof config9.store.resetKey !== "function" || config9.store.resetAll !== void 0 && typeof config9.store.resetAll !== "function" || config9.store.init !== void 0 && typeof config9.store.init !== "function") {
         throw new TypeError(
@@ -7445,9 +8081,29 @@ var init_dist5 = __esm({
       const options = getOptionsFromConfig(config9);
       config9.validations.creationStack(config9.store);
       config9.validations.unsharedStore(config9.store);
-      if (typeof config9.store.init === "function") config9.store.init(options);
+      if (typeof config9.store.init === "function") {
+        try {
+          const storeInit = config9.store.init(options);
+          if (storeInit instanceof Promise) {
+            storeInit.catch(
+              (error) => config9.logger.error(
+                error,
+                "express-rate-limit: async error during store initialization."
+              )
+            );
+          }
+        } catch (error) {
+          config9.logger.error(
+            error,
+            "express-rate-limit: error during store initialization."
+          );
+        }
+      }
       const middleware = handleAsyncErrors(
         async (request, response, next) => {
+          const closePromise = config9.skipFailedRequests && new Promise((resolve25) => response.once("close", resolve25));
+          const finishPromise = (config9.skipFailedRequests || config9.skipSuccessfulRequests) && new Promise((resolve25) => response.once("finish", resolve25));
+          const errorPromise = config9.skipFailedRequests && new Promise((resolve25) => response.once("error", resolve25));
           const skip = await config9.skip(request, response);
           if (skip) {
             next();
@@ -7463,9 +8119,9 @@ var init_dist5 = __esm({
             resetTime = incrementResult.resetTime;
           } catch (error) {
             if (config9.passOnStoreError) {
-              console.error(
-                "express-rate-limit: error from store, allowing request without rate-limiting.",
-                error
+              config9.logger.error(
+                error,
+                "express-rate-limit: error from store, allowing request without rate-limiting."
               );
               next();
               return;
@@ -7526,22 +8182,30 @@ var init_dist5 = __esm({
               }
             };
             if (config9.skipFailedRequests) {
-              response.on("finish", async () => {
-                if (!await config9.requestWasSuccessful(request, response))
+              if (finishPromise) {
+                void finishPromise.then(async () => {
+                  if (!await config9.requestWasSuccessful(request, response))
+                    await decrementKey();
+                });
+              }
+              if (closePromise) {
+                void closePromise.then(async () => {
+                  if (!response.writableEnded) await decrementKey();
+                });
+              }
+              if (errorPromise) {
+                void errorPromise.then(async () => {
                   await decrementKey();
-              });
-              response.on("close", async () => {
-                if (!response.writableEnded) await decrementKey();
-              });
-              response.on("error", async () => {
-                await decrementKey();
-              });
+                });
+              }
             }
             if (config9.skipSuccessfulRequests) {
-              response.on("finish", async () => {
-                if (await config9.requestWasSuccessful(request, response))
-                  await decrementKey();
-              });
+              if (finishPromise) {
+                void finishPromise.then(async () => {
+                  if (await config9.requestWasSuccessful(request, response))
+                    await decrementKey();
+                });
+              }
             }
           }
           config9.validations.disable();
@@ -7590,7 +8254,7 @@ function createEntityRoutes(bundle) {
       });
       res.json({ success: true, data: entities, meta: { limit: parsedLimit, offset: parsedOffset } });
     } catch (err) {
-      logger26.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger28.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
@@ -7603,7 +8267,7 @@ function createEntityRoutes(bundle) {
       }
       res.json({ success: true, data: entity });
     } catch (err) {
-      logger26.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger28.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
@@ -7613,18 +8277,18 @@ function createEntityRoutes(bundle) {
       const relationships = await store.getRelationshipsForEntity(req.params.id, direction);
       res.json({ success: true, data: relationships });
     } catch (err) {
-      logger26.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger28.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
   return router;
 }
-var logger26;
+var logger28;
 var init_entities = __esm({
   "packages/server/dist/routes/entities.js"() {
     "use strict";
     init_dist();
-    logger26 = createLogger("server:entities");
+    logger28 = createLogger("server:entities");
   }
 });
 
@@ -7655,7 +8319,7 @@ function createRelationshipRoutes(bundle) {
         meta: { message: "Provide sourceId or targetId to query relationships" }
       });
     } catch (err) {
-      logger27.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger29.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
@@ -7668,18 +8332,18 @@ function createRelationshipRoutes(bundle) {
       }
       res.json({ success: true, data: rel });
     } catch (err) {
-      logger27.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger29.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
   return router;
 }
-var logger27;
+var logger29;
 var init_relationships = __esm({
   "packages/server/dist/routes/relationships.js"() {
     "use strict";
     init_dist();
-    logger27 = createLogger("server:relationships");
+    logger29 = createLogger("server:relationships");
   }
 });
 
@@ -7693,7 +8357,7 @@ function createProjectRoutes(bundle) {
       const projects = await store.listProjects();
       res.json({ success: true, data: projects });
     } catch (err) {
-      logger28.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger30.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
@@ -7706,18 +8370,18 @@ function createProjectRoutes(bundle) {
       }
       res.json({ success: true, data: project });
     } catch (err) {
-      logger28.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger30.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
   return router;
 }
-var logger28;
+var logger30;
 var init_projects = __esm({
   "packages/server/dist/routes/projects.js"() {
     "use strict";
     init_dist();
-    logger28 = createLogger("server:projects");
+    logger30 = createLogger("server:projects");
   }
 });
 
@@ -7790,7 +8454,7 @@ function createQueryRoutes(bundle) {
         }
       });
     } catch (err) {
-      logger29.error("Query failed", { error: err instanceof Error ? err.message : String(err) });
+      logger31.error("Query failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "QUERY_FAILED", message: "Query processing failed" } });
     }
   });
@@ -7810,12 +8474,12 @@ ${entityContext || "No relevant entities found."}
 - If the context doesn't contain enough information, say so
 - Suggest follow-up questions the user might ask`;
 }
-var logger29;
+var logger31;
 var init_query = __esm({
   "packages/server/dist/routes/query.js"() {
     "use strict";
     init_dist();
-    logger29 = createLogger("server:query");
+    logger31 = createLogger("server:query");
   }
 });
 
@@ -7844,7 +8508,7 @@ function createContradictionRoutes(bundle) {
       }));
       res.json({ success: true, data: enriched, meta: { total: enriched.length } });
     } catch (err) {
-      logger30.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger32.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
@@ -7866,25 +8530,25 @@ function createContradictionRoutes(bundle) {
       });
       res.json({ success: true, data: { id: req.params.id, status: "resolved", action } });
     } catch (err) {
-      logger30.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger32.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
   return router;
 }
-var logger30;
+var logger32;
 var init_contradictions = __esm({
   "packages/server/dist/routes/contradictions.js"() {
     "use strict";
     init_dist();
-    logger30 = createLogger("server:contradictions");
+    logger32 = createLogger("server:contradictions");
   }
 });
 
 // packages/server/dist/routes/status.js
 import { Router as Router7 } from "express";
 import { readFileSync as readFileSync10 } from "node:fs";
-import { resolve as resolve19, dirname as dirname4 } from "node:path";
+import { resolve as resolve20, dirname as dirname4 } from "node:path";
 import { fileURLToPath } from "node:url";
 function createStatusRoutes(bundle) {
   const router = Router7();
@@ -7913,7 +8577,7 @@ function createStatusRoutes(bundle) {
         }
       });
     } catch (err) {
-      logger31.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger33.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
@@ -7927,7 +8591,7 @@ function createStatusRoutes(bundle) {
       });
       res.json({ success: true, data });
     } catch (err) {
-      logger31.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger33.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
@@ -7936,31 +8600,31 @@ function createStatusRoutes(bundle) {
       const data = store.getReportData();
       res.json({ success: true, data });
     } catch (err) {
-      logger31.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger33.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
   return router;
 }
-var logger31, _version;
+var logger33, _version;
 var init_status = __esm({
   "packages/server/dist/routes/status.js"() {
     "use strict";
     init_dist();
-    logger31 = createLogger("server:status");
+    logger33 = createLogger("server:status");
     _version = "unknown";
     try {
       let dir = typeof __dirname !== "undefined" ? __dirname : dirname4(fileURLToPath(import.meta.url));
       for (let i = 0; i < 6; i++) {
         try {
-          const pkg = JSON.parse(readFileSync10(resolve19(dir, "package.json"), "utf-8"));
+          const pkg = JSON.parse(readFileSync10(resolve20(dir, "package.json"), "utf-8"));
           if ((pkg.name === "@gzoo/cortex" || pkg.name === "gzoo-cortex") && pkg.version) {
             _version = pkg.version;
             break;
           }
         } catch {
         }
-        dir = resolve19(dir, "..");
+        dir = resolve20(dir, "..");
       }
     } catch {
     }
@@ -7989,7 +8653,7 @@ function createAuthMiddleware(options) {
     return (_req, _res, next) => next();
   }
   if (!token) {
-    logger32.error("Auth is required but no token configured. All API requests will be rejected.");
+    logger34.error("Auth is required but no token configured. All API requests will be rejected.");
     return (_req, res, _next) => {
       res.status(500).json({
         success: false,
@@ -8000,7 +8664,7 @@ function createAuthMiddleware(options) {
       });
     };
   }
-  logger32.info("API authentication enabled");
+  logger34.info("API authentication enabled");
   return (req, res, next) => {
     const authHeader = req.headers.authorization;
     if (!authHeader) {
@@ -8037,7 +8701,13 @@ function createAuthMiddleware(options) {
     next();
   };
 }
-function validateWsToken(config9, host, url) {
+function extractBearerToken(authHeader) {
+  const raw = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+  if (!raw?.startsWith("Bearer "))
+    return null;
+  return raw.slice(7);
+}
+function validateWsToken(config9, host, url, authHeader) {
   const authEnabled = config9.server.auth.enabled;
   const token = config9.server.auth.token;
   const isLocal = isLocalhost(host);
@@ -8046,6 +8716,9 @@ function validateWsToken(config9, host, url) {
     return true;
   if (!token)
     return false;
+  const headerToken = extractBearerToken(authHeader);
+  if (headerToken && safeEqual(headerToken, token))
+    return true;
   try {
     const params = new URL(url ?? "", "http://localhost").searchParams;
     const provided = params.get("token");
@@ -8056,12 +8729,12 @@ function validateWsToken(config9, host, url) {
     return false;
   }
 }
-var logger32, LOCALHOST_HOSTS;
+var logger34, LOCALHOST_HOSTS;
 var init_auth = __esm({
   "packages/server/dist/middleware/auth.js"() {
     "use strict";
     init_dist();
-    logger32 = createLogger("server:auth");
+    logger34 = createLogger("server:auth");
     LOCALHOST_HOSTS = /* @__PURE__ */ new Set(["127.0.0.1", "localhost", "::1"]);
   }
 });
@@ -8072,21 +8745,21 @@ function createEventRelay(server, config9, host) {
   const wss = new WebSocketServer({ server, path: "/ws" });
   const unsubscribers = [];
   wss.on("connection", (ws, req) => {
-    if (config9 && host && !validateWsToken(config9, host, req.url)) {
+    if (config9 && host && !validateWsToken(config9, host, req.url, req.headers.authorization)) {
       ws.close(4401, "Authentication required");
-      logger33.warn("WebSocket connection rejected \u2014 invalid or missing token");
+      logger35.warn("WebSocket connection rejected \u2014 invalid or missing token");
       return;
     }
-    logger33.debug("WebSocket client connected");
+    logger35.debug("WebSocket client connected");
     ws.on("message", (raw) => {
       try {
         const msg = JSON.parse(raw.toString());
-        logger33.debug("WebSocket message received", { type: msg.type });
+        logger35.debug("WebSocket message received", { type: msg.type });
       } catch {
       }
     });
     ws.on("close", () => {
-      logger33.debug("WebSocket client disconnected");
+      logger35.debug("WebSocket client disconnected");
     });
   });
   for (const eventType of RELAYED_EVENTS) {
@@ -8126,16 +8799,16 @@ function createEventRelay(server, config9, host) {
       unsub();
     wss.close();
   };
-  logger33.info("Event relay initialized", { events: RELAYED_EVENTS.length });
+  logger35.info("Event relay initialized", { events: RELAYED_EVENTS.length });
   return { wss, broadcast, close };
 }
-var logger33, RELAYED_EVENTS;
+var logger35, RELAYED_EVENTS;
 var init_event_relay = __esm({
   "packages/server/dist/ws/event-relay.js"() {
     "use strict";
     init_dist();
     init_auth();
-    logger33 = createLogger("server:ws");
+    logger35 = createLogger("server:ws");
     RELAYED_EVENTS = [
       "entity.created",
       "relationship.created",
@@ -8155,9 +8828,10 @@ var dist_exports2 = {};
 __export(dist_exports2, {
   startServer: () => startServer
 });
+import { readFileSync as readFileSync11 } from "node:fs";
 import express from "express";
 import { createServer } from "node:http";
-import { resolve as resolve20 } from "node:path";
+import { resolve as resolve21 } from "node:path";
 import cors from "cors";
 function createBundle(config9) {
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
@@ -8179,6 +8853,15 @@ async function startServer(options) {
   const bundle = createBundle(config9);
   const app = express();
   const server = createServer(app);
+  try {
+    const stats = await bundle.store.getStats();
+    const projects = await bundle.store.listProjects();
+    if (projects.length > 0 && stats.entityCount === 0 && stats.fileCount === 0) {
+      logger36.info("Knowledge graph is empty but projects are registered. Run `cortex ingest <project>` to backfill existing files.");
+      console.log("\n  Tip: Graph is empty. Run `cortex ingest` to backfill registered projects.\n");
+    }
+  } catch {
+  }
   app.set("trust proxy", 1);
   const corsOrigin = config9.server?.cors ?? [];
   app.use(cors({
@@ -8190,14 +8873,14 @@ async function startServer(options) {
       if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
         return callback(null, true);
       }
-      logger34.warn("CORS rejected", { origin, allowed: corsOrigin });
+      logger36.warn("CORS rejected", { origin, allowed: corsOrigin });
       callback(new Error("CORS not allowed"));
     }
   }));
   app.use(express.json({ limit: "1mb" }));
   const isLocal = host === "127.0.0.1" || host === "localhost" || host === "::1";
   if (!isLocal && !config9.server.auth.enabled) {
-    logger34.warn("Server bound to non-localhost without auth enabled. Set server.auth.enabled=true and server.auth.token in config, or set CORTEX_SERVER_AUTH_TOKEN env var.");
+    logger36.warn("Server bound to non-localhost without auth enabled. Set server.auth.enabled=true and server.auth.token in config, or set CORTEX_SERVER_AUTH_TOKEN env var.");
   }
   const rateLimitWindow = 6e4;
   const rateLimitMax = 30;
@@ -8240,19 +8923,40 @@ async function startServer(options) {
   api.use("/", createStatusRoutes(bundle));
   app.use("/api/v1", api);
   const relay = createEventRelay(server, config9, host);
-  logger34.info("WebSocket relay attached", { path: "/ws" });
+  logger36.info("WebSocket relay attached", { path: "/ws" });
   if (options.webDistPath) {
-    const webDist = resolve20(options.webDistPath);
-    app.use(express.static(webDist));
+    const webDist = resolve21(options.webDistPath);
+    app.use(express.static(webDist, { index: false }));
+    const injectAuthToken = (html) => {
+      const token = config9.server.auth.token;
+      if (!config9.server.auth.enabled || !token)
+        return html;
+      const tokenMeta = `<meta name="cortex-auth-token" content="${token}" />`;
+      const tokenScript = `<script>window.__CORTEX_TOKEN__=${JSON.stringify(token)};</script>`;
+      if (html.includes("</head>")) {
+        return html.replace("</head>", `    ${tokenMeta}
+    ${tokenScript}
+  </head>`);
+      }
+      return `${tokenMeta}
+${tokenScript}
+${html}`;
+    };
     const spaLimiter = rate_limit_default({ windowMs: 6e4, max: 60 });
     app.get("*", spaLimiter, (_req, res) => {
-      res.sendFile(resolve20(webDist, "index.html"));
+      const indexPath = resolve21(webDist, "index.html");
+      if (config9.server.auth.enabled && config9.server.auth.token) {
+        const html = injectAuthToken(readFileSync11(indexPath, "utf-8"));
+        res.type("html").send(html);
+      } else {
+        res.sendFile(indexPath);
+      }
     });
-    logger34.info("Serving web dashboard", { path: webDist });
+    logger36.info("Serving web dashboard", { path: webDist });
   }
   if (enableWatch) {
     try {
-      const { FileWatcher: FileWatcher2, IngestionPipeline: IngestionPipeline2 } = await Promise.resolve().then(() => (init_dist4(), dist_exports));
+      const { FileWatcher: FileWatcher2, IngestionPipeline: IngestionPipeline2 } = await Promise.resolve().then(() => (init_dist3(), dist_exports));
       const projects = await bundle.store.listProjects();
       if (projects.length > 0) {
         for (const project of projects) {
@@ -8282,19 +8986,19 @@ async function startServer(options) {
             }
           });
           watcher.start();
-          logger34.info("Watching project", { name: project.name, path: project.rootPath });
+          logger36.info("Watching project", { name: project.name, path: project.rootPath });
         }
       } else {
-        logger34.warn("No projects registered \u2014 file watcher not started. Run `cortex init` first.");
+        logger36.warn("No projects registered \u2014 file watcher not started. Run `cortex init` first.");
       }
     } catch (err) {
-      logger34.warn("File watcher failed to start", {
+      logger36.warn("File watcher failed to start", {
         error: err instanceof Error ? err.message : String(err)
       });
     }
   }
   server.listen(port, host, () => {
-    logger34.info(`Cortex server running at http://${host}:${port}`);
+    logger36.info(`Cortex server running at http://${host}:${port}`);
     console.log(`
   Cortex server running at http://${host}:${port}`);
     console.log(`  API:       http://${host}:${port}/api/v1`);
@@ -8312,7 +9016,7 @@ async function startServer(options) {
     console.log("");
   });
   const shutdown = () => {
-    logger34.info("Shutting down...");
+    logger36.info("Shutting down...");
     clearInterval(rateLimitCleanupInterval);
     relay.close();
     server.close();
@@ -8322,14 +9026,14 @@ async function startServer(options) {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 }
-var logger34;
+var logger36;
 var init_dist6 = __esm({
   "packages/server/dist/index.js"() {
     "use strict";
     init_dist5();
     init_dist();
+    init_dist4();
     init_dist2();
-    init_dist3();
     init_entities();
     init_relationships();
     init_projects();
@@ -8338,7 +9042,7 @@ var init_dist6 = __esm({
     init_status();
     init_event_relay();
     init_auth();
-    logger34 = createLogger("server");
+    logger36 = createLogger("server");
   }
 });
 
@@ -8450,6 +9154,16 @@ async function runInit(opts, globals) {
     console.log(chalk.dim("  \u2192 Cloud mode: everything runs via Claude API"));
   }
   config9.llm.mode = mode;
+  if (mode === "cloud-first") {
+    config9.llm.taskRouting = {
+      entity_extraction: "auto",
+      relationship_inference: "auto",
+      contradiction_detection: "auto",
+      conversational_query: "auto",
+      context_ranking: "auto",
+      embedding_generation: "auto"
+    };
+  }
   const usesLocal = hasOllama;
   const usesCloud = hasApiKey;
   if (usesLocal) {
@@ -8495,7 +9209,7 @@ async function runInit(opts, globals) {
         config9.llm.taskRouting = {
           entity_extraction: extractionRoute,
           relationship_inference: extractionRoute,
-          contradiction_detection: "local",
+          contradiction_detection: extractionRoute,
           conversational_query: "cloud",
           context_ranking: "local",
           embedding_generation: "local"
@@ -8598,7 +9312,7 @@ function writeConfig(config9, globals) {
   if (!existsSync3(cortexDir)) {
     mkdirSync2(cortexDir, { recursive: true });
   }
-  const configPath = globals.config ? resolve2(globals.config, "cortex.config.json") : resolve2(process.cwd(), "cortex.config.json");
+  const configPath = globals.config ? resolve2(globals.config, "cortex.config.json") : join3(homedir3(), ".cortex", "cortex.config.json");
   writeFileSync2(configPath, JSON.stringify(validated, null, 2), { mode: 384 });
   if (!globals.quiet) {
     if (globals.json) {
@@ -8611,16 +9325,188 @@ function writeConfig(config9, globals) {
   }
 }
 
-// packages/cli/dist/commands/watch.js
+// packages/cli/dist/commands/doctor.js
 init_dist();
-init_dist2();
 init_dist3();
 init_dist4();
-import { resolve as resolve4, join as join4 } from "node:path";
-import { existsSync as existsSync4 } from "node:fs";
+init_dist2();
+import { resolve as resolve4 } from "node:path";
+import { accessSync, constants, existsSync as existsSync4 } from "node:fs";
+import { homedir as homedir6 } from "node:os";
 import chalk2 from "chalk";
+var logger13 = createLogger("cli:doctor");
+function registerDoctorCommand(program2) {
+  program2.command("doctor").description("Validate Cortex setup \u2014 config, providers, projects, secrets, database").action(async () => {
+    const globals = program2.opts();
+    await runDoctor(globals);
+  });
+}
+async function checkOllama(host) {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3e3);
+    const response = await fetch(`${host}/api/tags`, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+function resolveApiKey(source) {
+  if (source.startsWith("env:")) {
+    return Boolean(process.env[source.slice(4)]);
+  }
+  return Boolean(source);
+}
+async function runDoctor(globals) {
+  const checks = [];
+  let exitCode = 0;
+  const configDir = globals.config ? resolve4(globals.config) : void 0;
+  const configPath = findConfigFile(configDir);
+  if (configPath) {
+    checks.push({ name: "Config file", ok: true, message: configPath });
+  } else {
+    checks.push({
+      name: "Config file",
+      ok: false,
+      message: "No cortex.config.json found",
+      hint: "Run `cortex init` to create ~/.cortex/cortex.config.json"
+    });
+    exitCode = 1;
+  }
+  try {
+    const config9 = loadConfig({ configDir });
+    const revalidated = cortexConfigSchema.safeParse(config9);
+    if (revalidated.success) {
+      checks.push({ name: "Config schema", ok: true, message: `Valid (${config9.llm.mode} mode)` });
+    } else {
+      checks.push({
+        name: "Config schema",
+        ok: false,
+        message: revalidated.error.issues.map((i) => i.path.join(".")).join(", ")
+      });
+      exitCode = 1;
+    }
+    const compiled = compileSecretPatterns(config9.privacy.secretPatterns);
+    if (compiled.length === config9.privacy.secretPatterns.length) {
+      checks.push({
+        name: "Secret patterns",
+        ok: true,
+        message: `${compiled.length} pattern(s) compile OK`
+      });
+    } else {
+      checks.push({
+        name: "Secret patterns",
+        ok: false,
+        message: `${config9.privacy.secretPatterns.length - compiled.length} invalid pattern(s)`,
+        hint: "Fix privacy.secretPatterns in cortex.config.json"
+      });
+      exitCode = 1;
+    }
+    if (config9.llm.mode !== "local-only") {
+      const hasKey = resolveApiKey(config9.llm.cloud.apiKeySource);
+      checks.push({
+        name: "Cloud API key",
+        ok: hasKey,
+        message: hasKey ? config9.llm.cloud.apiKeySource : `Missing: ${config9.llm.cloud.apiKeySource}`,
+        hint: hasKey ? void 0 : "Set the key in ~/.cortex/.env"
+      });
+      if (!hasKey)
+        exitCode = 1;
+    }
+    const router = new Router({ config: config9 });
+    if (config9.llm.mode !== "cloud-first") {
+      const local = router.getLocalProvider();
+      if (local) {
+        const reachable = await checkOllama(local.getHost());
+        checks.push({
+          name: "Ollama",
+          ok: reachable,
+          message: reachable ? local.getHost() : `Unreachable at ${local.getHost()}`,
+          hint: reachable ? void 0 : "Start with: ollama serve"
+        });
+        if (!reachable && config9.llm.mode === "local-only")
+          exitCode = 1;
+      }
+    }
+    if (config9.llm.mode !== "local-only") {
+      const cloudAvailable = await router.isAvailable();
+      checks.push({
+        name: "Cloud provider",
+        ok: cloudAvailable,
+        message: cloudAvailable ? `${config9.llm.cloud.provider} (${config9.llm.cloud.models.primary})` : "Not reachable or missing API key",
+        hint: cloudAvailable ? void 0 : "Check API key and network connectivity"
+      });
+      if (!cloudAvailable && config9.llm.mode === "cloud-first")
+        exitCode = 1;
+    }
+    const registryProjects = listProjects();
+    checks.push({
+      name: "Registered projects",
+      ok: registryProjects.length > 0,
+      message: registryProjects.length > 0 ? `${registryProjects.length} project(s): ${registryProjects.map((p) => p.name).join(", ")}` : "No projects in ~/.cortex/projects.json",
+      hint: registryProjects.length > 0 ? void 0 : "Run: cortex projects add <name> <path>"
+    });
+    const dbPath = config9.graph.dbPath.replace(/^~/, homedir6());
+    try {
+      const dbDir = resolve4(dbPath, "..");
+      accessSync(dbDir, constants.W_OK);
+      if (existsSync4(dbPath)) {
+        accessSync(dbPath, constants.R_OK | constants.W_OK);
+      }
+      const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
+      const stats = await store.getStats();
+      store.close();
+      checks.push({
+        name: "Database",
+        ok: true,
+        message: `${dbPath} (${stats.entityCount} entities)`
+      });
+    } catch (err) {
+      checks.push({
+        name: "Database",
+        ok: false,
+        message: err instanceof Error ? err.message : String(err),
+        hint: "Check graph.dbPath permissions"
+      });
+      exitCode = 1;
+    }
+  } catch (err) {
+    checks.push({
+      name: "Config load",
+      ok: false,
+      message: err instanceof Error ? err.message : String(err)
+    });
+    exitCode = 1;
+  }
+  if (globals.json) {
+    console.log(JSON.stringify({ checks, ok: exitCode === 0 }));
+  } else if (!globals.quiet) {
+    console.log(chalk2.bold("\nCortex Doctor\n"));
+    for (const check of checks) {
+      const icon = check.ok ? chalk2.green("\u2713") : chalk2.red("\u2717");
+      console.log(`${icon} ${chalk2.bold(check.name)}: ${check.message}`);
+      if (check.hint) {
+        console.log(chalk2.dim(`    \u2192 ${check.hint}`));
+      }
+    }
+    console.log(exitCode === 0 ? chalk2.green("\nAll checks passed.\n") : chalk2.yellow("\nSome checks failed. See hints above.\n"));
+  }
+  if (exitCode !== 0) {
+    logger13.debug("Doctor found issues", { checkCount: checks.length });
+    process.exit(exitCode);
+  }
+}
+
+// packages/cli/dist/commands/watch.js
+init_dist();
+init_dist4();
+init_dist2();
+init_dist3();
+import { resolve as resolve5 } from "node:path";
+import chalk3 from "chalk";
 import ora from "ora";
-var logger12 = createLogger("cli:watch");
+var logger14 = createLogger("cli:watch");
 function registerWatchCommand(program2) {
   program2.command("watch [project]").description("Start file watcher + ingestion pipeline. Optionally specify a registered project name.").option("--no-confirm", "Skip cost confirmation for bulk ingestion").action(async (projectName, opts) => {
     const globals = program2.opts();
@@ -8633,24 +9519,18 @@ async function runWatch(projectName, opts, globals) {
   if (projectName) {
     const registeredProject = getProject(projectName);
     if (!registeredProject) {
-      console.error(chalk2.red(`Error: Project "${projectName}" is not registered.`));
-      console.log(chalk2.dim("Register it with: cortex projects add <name> <path>"));
-      console.log(chalk2.dim("Or list registered projects: cortex projects list"));
+      console.error(chalk3.red(`Error: Project "${projectName}" is not registered.`));
+      console.log(chalk3.dim("Register it with: cortex projects add <name> <path>"));
+      console.log(chalk3.dim("Or list registered projects: cortex projects list"));
       process.exit(1);
     }
     projectRoot = registeredProject.path;
-    const configPath2 = join4(projectRoot, "cortex.config.json");
-    if (!existsSync4(configPath2)) {
-      console.error(chalk2.red(`Error: No cortex.config.json found in ${projectRoot}`));
-      console.log(chalk2.dim(`Run 'cd ${projectRoot} && cortex init' to create one.`));
-      process.exit(1);
-    }
     updateProjectLastWatched(projectName);
   }
-  const configDir = globals.config ? resolve4(globals.config) : projectRoot;
+  const configDir = globals.config ? resolve5(globals.config) : projectRoot;
   const configPath = findConfigFile(configDir);
   if (!globals.quiet) {
-    console.log(chalk2.dim(`Config: ${configPath ?? "(none found \u2014 using defaults)"}`));
+    console.log(chalk3.dim(`Config: ${configPath ?? "(none found \u2014 using defaults)"}`));
   }
   const config9 = loadConfig({ configDir });
   if (!globals.verbose) {
@@ -8658,11 +9538,11 @@ async function runWatch(projectName, opts, globals) {
   }
   if (!globals.quiet) {
     if (projectDisplayName) {
-      console.log(chalk2.bold(`
-\u26A1 Cortex Watch: ${chalk2.cyan(projectDisplayName)}
+      console.log(chalk3.bold(`
+\u26A1 Cortex Watch: ${chalk3.cyan(projectDisplayName)}
 `));
     } else {
-      console.log(chalk2.bold("\n\u26A1 Cortex Watch\n"));
+      console.log(chalk3.bold("\n\u26A1 Cortex Watch\n"));
     }
   }
   const store = new SQLiteStore({
@@ -8677,7 +9557,7 @@ async function runWatch(projectName, opts, globals) {
   if (!project) {
     project = await store.createProject({
       name: "default",
-      rootPath: resolve4(config9.ingest.watchDirs[0] ?? "."),
+      rootPath: resolve5(config9.ingest.watchDirs[0] ?? "."),
       privacyLevel: config9.privacy.defaultLevel,
       fileCount: 0,
       entityCount: 0
@@ -8744,7 +9624,7 @@ async function runWatch(projectName, opts, globals) {
     if (shuttingDown)
       return;
     if (changeType === "unlink") {
-      logger12.debug("File deleted", { path });
+      logger14.debug("File deleted", { path });
       return;
     }
     queue.push({ path, changeType });
@@ -8756,13 +9636,13 @@ async function runWatch(projectName, opts, globals) {
       return;
     spinner.stop();
     const { contradiction: c } = event.payload;
-    const severityColor = c.severity === "critical" ? chalk2.red : c.severity === "high" ? chalk2.yellow : chalk2.dim;
+    const severityColor = c.severity === "critical" ? chalk3.red : c.severity === "high" ? chalk3.yellow : chalk3.dim;
     console.log(severityColor(`
 \u26A0 Contradiction [${c.severity}]: ${c.description}`));
     if (c.suggestedResolution) {
-      console.log(chalk2.dim(`  Suggestion: ${c.suggestedResolution}`));
+      console.log(chalk3.dim(`  Suggestion: ${c.suggestedResolution}`));
     }
-    console.log(chalk2.dim(`  Resolve with: cortex resolve ${c.id} --action <action>
+    console.log(chalk3.dim(`  Resolve with: cortex resolve ${c.id} --action <action>
 `));
   });
   eventBus.on("budget.warning", (event) => {
@@ -8770,7 +9650,7 @@ async function runWatch(projectName, opts, globals) {
       return;
     spinner.stop();
     const { usedPercent, remainingUsd } = event.payload;
-    const color = usedPercent >= 90 ? chalk2.red : chalk2.yellow;
+    const color = usedPercent >= 90 ? chalk3.red : chalk3.yellow;
     console.log(color(`
 \u{1F4B8} Budget: ${usedPercent}% used ($${remainingUsd.toFixed(2)} remaining)
 `));
@@ -8780,12 +9660,12 @@ async function runWatch(projectName, opts, globals) {
       return;
     spinner.stop();
     const { totalSpentUsd } = event.payload;
-    console.log(chalk2.red(`
+    console.log(chalk3.red(`
 \u26D4 Monthly budget exhausted ($${totalSpentUsd.toFixed(2)} spent)`));
-    console.log(chalk2.dim("   All tasks are now routing to local Ollama. Run `cortex costs` for details.\n"));
+    console.log(chalk3.dim("   All tasks are now routing to local Ollama. Run `cortex costs` for details.\n"));
   });
   if (!globals.quiet) {
-    console.log(chalk2.dim(`Watching ${config9.ingest.watchDirs.join(", ")} (Ctrl+C to stop)
+    console.log(chalk3.dim(`Watching ${config9.ingest.watchDirs.join(", ")} (Ctrl+C to stop)
 `));
   }
   const shutdown = () => {
@@ -8796,8 +9676,8 @@ async function runWatch(projectName, opts, globals) {
     queue.length = 0;
     if (!globals.quiet) {
       spinner.stop();
-      console.log(chalk2.dim("\n\nShutting down..."));
-      console.log(chalk2.green(`
+      console.log(chalk3.dim("\n\nShutting down..."));
+      console.log(chalk3.green(`
 \u2713 Session: ${ingestedCount} files, ${entityCount} entities, ${errorCount} errors`));
     }
     watcher.stop().catch(() => {
@@ -8830,13 +9710,13 @@ async function runWatch(projectName, opts, globals) {
 
 // packages/cli/dist/commands/query.js
 init_dist();
+init_dist4();
+init_dist4();
+init_dist4();
 init_dist2();
-init_dist2();
-init_dist2();
-init_dist3();
-import { resolve as resolve5 } from "node:path";
-import chalk3 from "chalk";
-var logger13 = createLogger("cli:query");
+import { resolve as resolve6 } from "node:path";
+import chalk4 from "chalk";
+var logger15 = createLogger("cli:query");
 function registerQueryCommand(program2) {
   program2.command("query <question>").description("Natural language query with citations").option("--project <name>", "Filter to specific project").option("--type <type>", "Filter entity type").option("--since <date>", "Only entities after date").option("--before <date>", "Only entities before date").option("--raw", "Show debug info", false).option("--no-stream", "Wait for full response").action(async (question, opts) => {
     const globals = program2.opts();
@@ -8844,7 +9724,7 @@ function registerQueryCommand(program2) {
   });
 }
 async function runQuery(question, opts, globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve5(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve6(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   const vectorStore = new VectorStore({ dbPath: config9.graph.vectorDbPath });
   await vectorStore.initialize();
@@ -8862,11 +9742,11 @@ async function runQuery(question, opts, globals) {
   ].filter(Boolean).join("\n");
   const context = await queryEngine.assembleContext(question, void 0, opts.project);
   if (opts.raw) {
-    console.log(chalk3.dim(`Context: ${context.entities.length} entities, ${context.relationships.length} rels, ~${context.totalTokensEstimate} tokens
+    console.log(chalk4.dim(`Context: ${context.entities.length} entities, ${context.relationships.length} rels, ~${context.totalTokensEstimate} tokens
 `));
   }
   if (context.entities.length === 0 && graphStats.entityCount === 0) {
-    console.log(chalk3.yellow("No entities found. Try ingesting files first with `cortex watch`."));
+    console.log(chalk4.yellow("No entities found. Try ingesting files first with `cortex watch`."));
     store.close();
     return;
   }
@@ -8908,7 +9788,7 @@ async function runQuery(question, opts, globals) {
     console.log("");
     await showFollowUps(router, question, fullResponse, globals);
     if (opts.raw && result) {
-      console.log(chalk3.dim(`
+      console.log(chalk4.dim(`
 Tokens: ${result.inputTokens} in / ${result.outputTokens} out | Cost: $${result.costUsd.toFixed(4)}`));
     }
   } else {
@@ -8952,9 +9832,9 @@ async function showFollowUps(router, question, answer, globals) {
       temperature: follow_up_generation_exports.config.temperature,
       maxTokens: follow_up_generation_exports.config.maxTokens
     }, follow_up_generation_exports.outputSchema);
-    console.log(chalk3.dim("\nFollow-ups:"));
+    console.log(chalk4.dim("\nFollow-ups:"));
     for (const q of result.data.followUps) {
-      console.log(chalk3.dim(`  \u2192 ${q}`));
+      console.log(chalk4.dim(`  \u2192 ${q}`));
     }
   } catch {
   }
@@ -8962,10 +9842,10 @@ async function showFollowUps(router, question, answer, globals) {
 
 // packages/cli/dist/commands/find.js
 init_dist();
-init_dist2();
-import { resolve as resolve6 } from "node:path";
-import chalk4 from "chalk";
-var logger14 = createLogger("cli:find");
+init_dist4();
+import { resolve as resolve7 } from "node:path";
+import chalk5 from "chalk";
+var logger16 = createLogger("cli:find");
 function registerFindCommand(program2) {
   program2.command("find <name>").description("Direct entity lookup with relationship expansion").option("--expand <depth>", "Show N hops of relationships", "0").option("--type <type>", "Filter entity type").action(async (name, opts) => {
     const globals = program2.opts();
@@ -8973,7 +9853,7 @@ function registerFindCommand(program2) {
   });
 }
 async function runFind(name, opts, globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve6(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve7(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   const depth = parseInt(opts.expand, 10) || 0;
   try {
@@ -8985,7 +9865,7 @@ async function runFind(name, opts, globals) {
         if (globals.json) {
           console.log(JSON.stringify({ error: "No entities found", query: name }));
         } else {
-          console.log(chalk4.yellow(`No entities found matching "${name}".`));
+          console.log(chalk5.yellow(`No entities found matching "${name}".`));
         }
         store.close();
         return;
@@ -8998,12 +9878,12 @@ async function runFind(name, opts, globals) {
             matches: filtered.map((e) => ({ id: e.id, type: e.type, name: e.name }))
           }));
         } else {
-          console.log(chalk4.cyan(`Found ${filtered.length} matches for "${name}":
+          console.log(chalk5.cyan(`Found ${filtered.length} matches for "${name}":
 `));
           for (const e of filtered) {
-            console.log(`  ${chalk4.dim(e.id.slice(0, 8))}  ${chalk4.bold(e.name)}  ${chalk4.dim(`[${e.type}]`)}`);
+            console.log(`  ${chalk5.dim(e.id.slice(0, 8))}  ${chalk5.bold(e.name)}  ${chalk5.dim(`[${e.type}]`)}`);
           }
-          console.log(chalk4.dim("\nUse the full ID to select a specific entity."));
+          console.log(chalk5.dim("\nUse the full ID to select a specific entity."));
         }
         store.close();
         return;
@@ -9019,43 +9899,43 @@ async function runFind(name, opts, globals) {
       }
     }
   } catch (err) {
-    logger14.error("Find failed", { error: err instanceof Error ? err.message : String(err) });
+    logger16.error("Find failed", { error: err instanceof Error ? err.message : String(err) });
     if (globals.json) {
       console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
     } else {
-      console.error(chalk4.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+      console.error(chalk5.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
     }
   }
   store.close();
 }
 function displayEntity(entity) {
   console.log("");
-  console.log(chalk4.bold.cyan(`${entity.name}`) + chalk4.dim(` [${entity.type}]`));
-  console.log(chalk4.dim("\u2500".repeat(50)));
-  console.log(chalk4.dim(`ID:         ${entity.id}`));
-  console.log(chalk4.dim(`Source:     ${entity.sourceFile}`));
+  console.log(chalk5.bold.cyan(`${entity.name}`) + chalk5.dim(` [${entity.type}]`));
+  console.log(chalk5.dim("\u2500".repeat(50)));
+  console.log(chalk5.dim(`ID:         ${entity.id}`));
+  console.log(chalk5.dim(`Source:     ${entity.sourceFile}`));
   if (entity.sourceRange) {
-    console.log(chalk4.dim(`Lines:      ${entity.sourceRange.startLine}\u2013${entity.sourceRange.endLine}`));
+    console.log(chalk5.dim(`Lines:      ${entity.sourceRange.startLine}\u2013${entity.sourceRange.endLine}`));
   }
-  console.log(chalk4.dim(`Confidence: ${(entity.confidence * 100).toFixed(0)}%`));
-  console.log(chalk4.dim(`Created:    ${entity.createdAt}`));
+  console.log(chalk5.dim(`Confidence: ${(entity.confidence * 100).toFixed(0)}%`));
+  console.log(chalk5.dim(`Created:    ${entity.createdAt}`));
   if (entity.summary) {
     console.log("");
-    console.log(chalk4.white(entity.summary));
+    console.log(chalk5.white(entity.summary));
   }
   if (entity.tags.length > 0) {
     console.log("");
-    console.log(chalk4.dim("Tags: ") + entity.tags.map((t) => chalk4.cyan(t)).join(", "));
+    console.log(chalk5.dim("Tags: ") + entity.tags.map((t) => chalk5.cyan(t)).join(", "));
   }
   console.log("");
 }
 async function expandRelationships(store, entityId, depth, visited) {
   const relationships = await store.getRelationshipsForEntity(entityId);
   if (relationships.length === 0) {
-    console.log(chalk4.dim("  No relationships found."));
+    console.log(chalk5.dim("  No relationships found."));
     return;
   }
-  console.log(chalk4.bold("Relationships:"));
+  console.log(chalk5.bold("Relationships:"));
   for (const rel of relationships) {
     const isSource = rel.sourceEntityId === entityId;
     const otherEntityId = isSource ? rel.targetEntityId : rel.sourceEntityId;
@@ -9066,28 +9946,28 @@ async function expandRelationships(store, entityId, depth, visited) {
     displayRelationship(rel, direction, otherName, otherType);
     if (depth > 1 && !visited.has(otherEntityId)) {
       visited.add(otherEntityId);
-      console.log(chalk4.dim(`  ${"\u2500".repeat(40)}`));
+      console.log(chalk5.dim(`  ${"\u2500".repeat(40)}`));
       await expandRelationships(store, otherEntityId, depth - 1, visited);
     }
   }
 }
 function displayRelationship(rel, direction, targetName, targetType) {
-  const confidenceColor = rel.confidence >= 0.8 ? chalk4.green : rel.confidence >= 0.5 ? chalk4.yellow : chalk4.red;
-  console.log(`  ${direction} ${chalk4.bold(rel.type)} ${chalk4.cyan(targetName)} ${chalk4.dim(targetType)} ${confidenceColor(`${(rel.confidence * 100).toFixed(0)}%`)}`);
+  const confidenceColor = rel.confidence >= 0.8 ? chalk5.green : rel.confidence >= 0.5 ? chalk5.yellow : chalk5.red;
+  console.log(`  ${direction} ${chalk5.bold(rel.type)} ${chalk5.cyan(targetName)} ${chalk5.dim(targetType)} ${confidenceColor(`${(rel.confidence * 100).toFixed(0)}%`)}`);
   if (rel.description) {
-    console.log(chalk4.dim(`    ${rel.description}`));
+    console.log(chalk5.dim(`    ${rel.description}`));
   }
 }
 
 // packages/cli/dist/commands/status.js
 init_dist();
+init_dist4();
 init_dist2();
-init_dist3();
-import { resolve as resolve7 } from "node:path";
+import { resolve as resolve8 } from "node:path";
 import { statSync as statSync3, readFileSync as readFileSync5, existsSync as existsSync5 } from "node:fs";
-import { homedir as homedir6 } from "node:os";
-import chalk5 from "chalk";
-var logger15 = createLogger("cli:status");
+import { homedir as homedir7 } from "node:os";
+import chalk6 from "chalk";
+var logger17 = createLogger("cli:status");
 function sanitizeConfigValue(val) {
   return [...val].map((c) => c).join("");
 }
@@ -9114,7 +9994,7 @@ async function checkServerRunning(port) {
 }
 function getServerPid() {
   try {
-    const pidPath = resolve7(homedir6(), ".cortex", "cortex.pid");
+    const pidPath = resolve8(homedir7(), ".cortex", "cortex.pid");
     if (!existsSync5(pidPath))
       return null;
     const pid = parseInt(readFileSync5(pidPath, "utf-8").trim(), 10);
@@ -9156,7 +10036,7 @@ function formatBytes(bytes) {
   return `${value.toFixed(1)} ${units[i]}`;
 }
 async function runStatus(globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve7(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve8(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   try {
     const stats = await store.getStats();
@@ -9251,58 +10131,58 @@ async function runStatus(globals) {
     }
     const version = getVersion();
     console.log("");
-    console.log(chalk5.bold.cyan("CORTEX STATUS") + chalk5.dim(` v${version}`));
-    console.log(chalk5.dim("\u2500".repeat(50)));
-    console.log(chalk5.white("Graph:     ") + chalk5.bold(`${stats.entityCount.toLocaleString()}`) + " entities | " + chalk5.bold(`${stats.relationshipCount.toLocaleString()}`) + " relationships | " + chalk5.bold(`${stats.contradictionCount}`) + " contradictions");
-    console.log(chalk5.white("Projects:  ") + `${projects.length} watched`);
+    console.log(chalk6.bold.cyan("CORTEX STATUS") + chalk6.dim(` v${version}`));
+    console.log(chalk6.dim("\u2500".repeat(50)));
+    console.log(chalk6.white("Graph:     ") + chalk6.bold(`${stats.entityCount.toLocaleString()}`) + " entities | " + chalk6.bold(`${stats.relationshipCount.toLocaleString()}`) + " relationships | " + chalk6.bold(`${stats.contradictionCount}`) + " contradictions");
+    console.log(chalk6.white("Projects:  ") + `${projects.length} watched`);
     for (const p of projects) {
-      console.log(chalk5.dim(`           ${p.name} \u2192 ${p.rootPath}`));
+      console.log(chalk6.dim(`           ${p.name} \u2192 ${p.rootPath}`));
     }
-    console.log(chalk5.white("Files:     ") + `${stats.fileCount} tracked`);
-    console.log(chalk5.white("Storage:   ") + `${formatBytes(stats.dbSizeBytes)} (SQLite) | ${formatBytes(vectorSizeBytes)} (vectors)`);
+    console.log(chalk6.white("Files:     ") + `${stats.fileCount} tracked`);
+    console.log(chalk6.white("Storage:   ") + `${formatBytes(stats.dbSizeBytes)} (SQLite) | ${formatBytes(vectorSizeBytes)} (vectors)`);
     if (serverReachable) {
-      console.log(chalk5.white("Web GUI:   ") + chalk5.green("\u2713") + ` http://127.0.0.1:${serverPort}` + chalk5.dim(` (pid ${serverPid})`));
+      console.log(chalk6.white("Web GUI:   ") + chalk6.green("\u2713") + ` http://127.0.0.1:${serverPort}` + chalk6.dim(` (pid ${serverPid})`));
     } else if (serverPid) {
-      console.log(chalk5.white("Web GUI:   ") + chalk5.yellow("\u26A0") + ` pid ${serverPid} found but not responding on port ${serverPort}`);
+      console.log(chalk6.white("Web GUI:   ") + chalk6.yellow("\u26A0") + ` pid ${serverPid} found but not responding on port ${serverPort}`);
     } else {
-      console.log(chalk5.white("Web GUI:   ") + chalk5.dim("not running") + chalk5.dim(` \u2014 start with: cortex serve`));
+      console.log(chalk6.white("Web GUI:   ") + chalk6.dim("not running") + chalk6.dim(` \u2014 start with: cortex serve`));
     }
     console.log("");
     const numCtx = numCtxSafe;
     const numGpu = numGpuSafe;
-    console.log(chalk5.white("LLM Mode:  ") + mode);
+    console.log(chalk6.white("LLM Mode:  ") + mode);
     const cloudLabel = `${cloudPrimary} / ${cloudFast} (${cloudProvider})`;
     const localLabel = `${localModel} @ ${localHost}`;
     const localDetail = `${numCtx.toLocaleString()} ctx | GPU: ${numGpu === -1 ? "auto" : numGpu} layers | ~30 tok/s est.`;
     if (mode === "cloud-first") {
-      const llmStatus = hasApiKey ? chalk5.green("\u2713") : chalk5.red("\u2717");
-      console.log(chalk5.white("  Cloud:   ") + `${llmStatus} ${cloudLabel}`);
+      const llmStatus = hasApiKey ? chalk6.green("\u2713") : chalk6.red("\u2717");
+      console.log(chalk6.white("  Cloud:   ") + `${llmStatus} ${cloudLabel}`);
     } else if (mode === "local-only") {
-      const llmStatus = ollamaAvailable ? chalk5.green("\u2713") : chalk5.red("\u2717");
-      console.log(chalk5.white("  Local:   ") + `${llmStatus} ${localLabel}`);
-      console.log(chalk5.dim(`            ${localDetail}`));
+      const llmStatus = ollamaAvailable ? chalk6.green("\u2713") : chalk6.red("\u2717");
+      console.log(chalk6.white("  Local:   ") + `${llmStatus} ${localLabel}`);
+      console.log(chalk6.dim(`            ${localDetail}`));
     } else if (mode === "local-first") {
-      const localStatus = ollamaAvailable ? chalk5.green("\u2713") : chalk5.red("\u2717");
-      const cloudStatus = hasApiKey ? chalk5.green("\u2713") : chalk5.yellow("\u25CB");
-      console.log(chalk5.white("  Cloud:   ") + `${cloudStatus} ${cloudLabel}`);
-      console.log(chalk5.white("  Local:   ") + `${localStatus} ${localLabel}`);
+      const localStatus = ollamaAvailable ? chalk6.green("\u2713") : chalk6.red("\u2717");
+      const cloudStatus = hasApiKey ? chalk6.green("\u2713") : chalk6.yellow("\u25CB");
+      console.log(chalk6.white("  Cloud:   ") + `${cloudStatus} ${cloudLabel}`);
+      console.log(chalk6.white("  Local:   ") + `${localStatus} ${localLabel}`);
       if (ollamaAvailable) {
-        console.log(chalk5.dim(`            ${localDetail}`));
+        console.log(chalk6.dim(`            ${localDetail}`));
       }
     } else {
-      const localStatus = ollamaAvailable ? chalk5.green("\u2713") : chalk5.yellow("\u25CB");
-      const cloudStatus = hasApiKey ? chalk5.green("\u2713") : chalk5.red("\u2717");
-      console.log(chalk5.white("  Cloud:   ") + `${cloudStatus} ${cloudLabel}`);
-      console.log(chalk5.white("  Local:   ") + `${localStatus} ${localLabel}`);
+      const localStatus = ollamaAvailable ? chalk6.green("\u2713") : chalk6.yellow("\u25CB");
+      const cloudStatus = hasApiKey ? chalk6.green("\u2713") : chalk6.red("\u2717");
+      console.log(chalk6.white("  Cloud:   ") + `${cloudStatus} ${cloudLabel}`);
+      console.log(chalk6.white("  Local:   ") + `${localStatus} ${localLabel}`);
       if (ollamaAvailable) {
-        console.log(chalk5.dim(`            ${localDetail}`));
+        console.log(chalk6.dim(`            ${localDetail}`));
       }
     }
     console.log("");
     const usedPct = budgetLimitUsd > 0 ? (spentUsdSafe / budgetLimitUsd * 100).toFixed(1) : "0.0";
-    console.log(chalk5.white("Cost:      ") + `$${spentUsdSafe.toFixed(2)} / $${budgetLimitUsd.toFixed(2)} this month (${usedPct}%)`);
+    console.log(chalk6.white("Cost:      ") + `$${spentUsdSafe.toFixed(2)} / $${budgetLimitUsd.toFixed(2)} this month (${usedPct}%)`);
     if (localSavingsSafe > 0) {
-      console.log(chalk5.dim(`           Savings from local: ~$${localSavingsSafe.toFixed(2)} est.`));
+      console.log(chalk6.dim(`           Savings from local: ~$${localSavingsSafe.toFixed(2)} est.`));
     }
     console.log("");
     let statusOk = false;
@@ -9334,21 +10214,21 @@ async function runStatus(globals) {
       statusOk = hasApiKey;
       statusMsg = hasApiKey ? "\u2713 Fully operational" : "\u26A0 API key not set. Run `cortex init` to configure.";
     }
-    console.log(chalk5.white("Status:    ") + (statusOk ? chalk5.green(statusMsg) : chalk5.yellow(statusMsg)));
+    console.log(chalk6.white("Status:    ") + (statusOk ? chalk6.green(statusMsg) : chalk6.yellow(statusMsg)));
     console.log("");
   } catch (err) {
-    logger15.error("Status check failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk5.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger17.error("Status check failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk6.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
   store.close();
 }
 
 // packages/cli/dist/commands/costs.js
 init_dist();
-init_dist2();
-import { resolve as resolve8 } from "node:path";
-import chalk6 from "chalk";
-var logger16 = createLogger("cli:costs");
+init_dist4();
+import { resolve as resolve9 } from "node:path";
+import chalk7 from "chalk";
+var logger18 = createLogger("cli:costs");
 function registerCostsCommand(program2) {
   program2.command("costs").description("Detailed cost reporting").option("--period <period>", "Time period: today, week, month, all", "month").option("--by <grouping>", "Group by: task, model, provider, day", "task").option("--csv", "Export as CSV", false).action(async (opts) => {
     const globals = program2.opts();
@@ -9378,7 +10258,7 @@ function getPeriodStart(period) {
   }
 }
 async function runCosts(opts, globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve8(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve9(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   try {
     const periodStart = getPeriodStart(opts.period);
@@ -9387,7 +10267,7 @@ async function runCosts(opts, globals) {
       if (globals.json) {
         console.log(JSON.stringify({ period: opts.period, totalCostUsd: 0, records: [] }));
       } else if (!opts.csv) {
-        console.log(chalk6.yellow(`No usage data for period: ${opts.period}`));
+        console.log(chalk7.yellow(`No usage data for period: ${opts.period}`));
       }
       store.close();
       return;
@@ -9439,17 +10319,17 @@ async function runCosts(opts, globals) {
       return;
     }
     console.log("");
-    console.log(chalk6.bold.cyan(`CORTEX COSTS \u2014 ${opts.period}`));
-    console.log(chalk6.dim("\u2500".repeat(60)));
-    console.log(chalk6.white("Total Cost:    ") + chalk6.bold(`$${totalCost.toFixed(4)}`));
-    console.log(chalk6.white("Requests:      ") + rows.length.toLocaleString());
-    console.log(chalk6.white("Input Tokens:  ") + totalInput.toLocaleString());
-    console.log(chalk6.white("Output Tokens: ") + totalOutput.toLocaleString());
-    const budgetColor = budgetUsed >= 90 ? chalk6.red : budgetUsed >= 50 ? chalk6.yellow : chalk6.green;
-    console.log(chalk6.white("Budget:        ") + budgetColor(`$${totalCost.toFixed(2)} / $${budgetLimit.toFixed(2)} (${budgetUsed.toFixed(1)}%)`));
+    console.log(chalk7.bold.cyan(`CORTEX COSTS \u2014 ${opts.period}`));
+    console.log(chalk7.dim("\u2500".repeat(60)));
+    console.log(chalk7.white("Total Cost:    ") + chalk7.bold(`$${totalCost.toFixed(4)}`));
+    console.log(chalk7.white("Requests:      ") + rows.length.toLocaleString());
+    console.log(chalk7.white("Input Tokens:  ") + totalInput.toLocaleString());
+    console.log(chalk7.white("Output Tokens: ") + totalOutput.toLocaleString());
+    const budgetColor = budgetUsed >= 90 ? chalk7.red : budgetUsed >= 50 ? chalk7.yellow : chalk7.green;
+    console.log(chalk7.white("Budget:        ") + budgetColor(`$${totalCost.toFixed(2)} / $${budgetLimit.toFixed(2)} (${budgetUsed.toFixed(1)}%)`));
     console.log("");
-    console.log(chalk6.bold(`By ${opts.by}:`));
-    console.log(chalk6.dim("\u2500".repeat(60)));
+    console.log(chalk7.bold(`By ${opts.by}:`));
+    console.log(chalk7.dim("\u2500".repeat(60)));
     const sorted = [...groups.entries()].sort((a, b) => b[1].cost - a[1].cost);
     const maxKeyLen = Math.max(...sorted.map(([k]) => k.length), 10);
     for (const [key, val] of sorted) {
@@ -9459,8 +10339,8 @@ async function runCosts(opts, globals) {
     }
     console.log("");
   } catch (err) {
-    logger16.error("Cost report failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk6.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger18.error("Cost report failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk7.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
   store.close();
 }
@@ -9484,16 +10364,16 @@ function getGroupKey(row, groupBy) {
 function buildBar(ratio, width) {
   const filled = Math.round(ratio * width);
   const empty = width - filled;
-  return chalk6.cyan("\u2588".repeat(filled)) + chalk6.dim("\u2591".repeat(empty));
+  return chalk7.cyan("\u2588".repeat(filled)) + chalk7.dim("\u2591".repeat(empty));
 }
 
 // packages/cli/dist/commands/config.js
 init_dist();
-import { resolve as resolve9, dirname as dirname2 } from "node:path";
-import { homedir as homedir7 } from "node:os";
+import { resolve as resolve10, dirname as dirname2 } from "node:path";
+import { homedir as homedir8 } from "node:os";
 import { readFileSync as readFileSync6, writeFileSync as writeFileSync3, mkdirSync as mkdirSync5 } from "node:fs";
-import chalk7 from "chalk";
-var logger17 = createLogger("cli:config");
+import chalk8 from "chalk";
+var logger19 = createLogger("cli:config");
 function registerConfigCommand(program2) {
   const configCmd = program2.command("config").description("Read/write/validate configuration (includes exclude subcommand)");
   configCmd.command("get <key>").description("Get a configuration value").action(async (key) => {
@@ -9576,12 +10456,12 @@ function parseValue(value) {
 }
 function getConfigFilePath(globals) {
   if (globals.config) {
-    return resolve9(globals.config, "cortex.config.json");
+    return resolve10(globals.config, "cortex.config.json");
   }
   const found = findConfigFile();
   if (found)
     return found;
-  return resolve9(homedir7(), ".cortex", "cortex.config.json");
+  return resolve10(homedir8(), ".cortex", "cortex.config.json");
 }
 function readConfigFile2(path) {
   try {
@@ -9593,13 +10473,13 @@ function readConfigFile2(path) {
 }
 async function runConfigGet(key, globals) {
   try {
-    const config9 = loadConfig({ configDir: globals.config ? resolve9(globals.config) : void 0 });
+    const config9 = loadConfig({ configDir: globals.config ? resolve10(globals.config) : void 0 });
     const value = getNestedValue(config9, key);
     if (value === void 0) {
       if (globals.json) {
         console.log(JSON.stringify({ error: `Key not found: ${key}` }));
       } else {
-        console.log(chalk7.yellow(`Key not found: ${key}`));
+        console.log(chalk8.yellow(`Key not found: ${key}`));
       }
       return;
     }
@@ -9610,8 +10490,8 @@ async function runConfigGet(key, globals) {
       console.log(display);
     }
   } catch (err) {
-    logger17.error("Config get failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk7.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger19.error("Config get failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk8.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 async function runConfigSet(key, value, globals) {
@@ -9626,7 +10506,7 @@ async function runConfigSet(key, value, globals) {
       if (globals.json) {
         console.log(JSON.stringify({ error: "Validation failed", issues: result.error.issues }));
       } else {
-        console.error(chalk7.red("Validation failed:\n") + chalk7.yellow(issues));
+        console.error(chalk8.red("Validation failed:\n") + chalk8.yellow(issues));
       }
       return;
     }
@@ -9635,24 +10515,24 @@ async function runConfigSet(key, value, globals) {
     if (globals.json) {
       console.log(JSON.stringify({ key, value: parsed, saved: true }));
     } else {
-      console.log(chalk7.green(`\u2713 Set ${key} = ${JSON.stringify(parsed)}`));
+      console.log(chalk8.green(`\u2713 Set ${key} = ${JSON.stringify(parsed)}`));
     }
   } catch (err) {
-    logger17.error("Config set failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk7.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger19.error("Config set failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk8.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 async function runConfigList(globals) {
   try {
-    const config9 = loadConfig({ configDir: globals.config ? resolve9(globals.config) : void 0 });
+    const config9 = loadConfig({ configDir: globals.config ? resolve10(globals.config) : void 0 });
     const defaults = getDefaultConfig();
     if (globals.json) {
       console.log(JSON.stringify(config9));
       return;
     }
     console.log("");
-    console.log(chalk7.bold.cyan("CORTEX CONFIGURATION"));
-    console.log(chalk7.dim("\u2500".repeat(50)));
+    console.log(chalk8.bold.cyan("CORTEX CONFIGURATION"));
+    console.log(chalk8.dim("\u2500".repeat(50)));
     const configFlat = flattenObject(config9);
     const defaultFlat = flattenObject(defaults);
     let hasNonDefault = false;
@@ -9661,16 +10541,16 @@ async function runConfigList(globals) {
       const isDefault = JSON.stringify(value) === JSON.stringify(defaultValue);
       if (!isDefault) {
         hasNonDefault = true;
-        console.log(chalk7.white(`  ${key}: `) + chalk7.bold(JSON.stringify(value)) + chalk7.dim(` (default: ${JSON.stringify(defaultValue)})`));
+        console.log(chalk8.white(`  ${key}: `) + chalk8.bold(JSON.stringify(value)) + chalk8.dim(` (default: ${JSON.stringify(defaultValue)})`));
       }
     }
     if (!hasNonDefault) {
-      console.log(chalk7.dim("  All values are at defaults."));
+      console.log(chalk8.dim("  All values are at defaults."));
     }
     console.log("");
   } catch (err) {
-    logger17.error("Config list failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk7.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger19.error("Config list failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk8.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 async function runConfigReset(key, globals) {
@@ -9684,7 +10564,7 @@ async function runConfigReset(key, globals) {
         if (globals.json) {
           console.log(JSON.stringify({ error: `Key not found: ${key}` }));
         } else {
-          console.log(chalk7.yellow(`Key not found: ${key}`));
+          console.log(chalk8.yellow(`Key not found: ${key}`));
         }
         return;
       }
@@ -9693,19 +10573,19 @@ async function runConfigReset(key, globals) {
       if (globals.json) {
         console.log(JSON.stringify({ key, value: defaultValue, reset: true }));
       } else {
-        console.log(chalk7.green(`\u2713 Reset ${key} to default: ${JSON.stringify(defaultValue)}`));
+        console.log(chalk8.green(`\u2713 Reset ${key} to default: ${JSON.stringify(defaultValue)}`));
       }
     } else {
       writeFileSync3(configPath, JSON.stringify(defaults, null, 2) + "\n", "utf-8");
       if (globals.json) {
         console.log(JSON.stringify({ reset: "all", saved: true }));
       } else {
-        console.log(chalk7.green("\u2713 All configuration reset to defaults."));
+        console.log(chalk8.green("\u2713 All configuration reset to defaults."));
       }
     }
   } catch (err) {
-    logger17.error("Config reset failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk7.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger19.error("Config reset failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk8.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 async function runConfigValidate(globals) {
@@ -9717,41 +10597,41 @@ async function runConfigValidate(globals) {
       if (globals.json) {
         console.log(JSON.stringify({ valid: true }));
       } else {
-        console.log(chalk7.green("\u2713 Configuration is valid."));
+        console.log(chalk8.green("\u2713 Configuration is valid."));
       }
     } else {
       const issues = result.error.issues;
       if (globals.json) {
         console.log(JSON.stringify({ valid: false, issues }));
       } else {
-        console.log(chalk7.red("\u2717 Configuration has errors:\n"));
+        console.log(chalk8.red("\u2717 Configuration has errors:\n"));
         for (const issue of issues) {
-          console.log(chalk7.yellow(`  ${issue.path.join(".")}: ${issue.message}`));
+          console.log(chalk8.yellow(`  ${issue.path.join(".")}: ${issue.message}`));
         }
       }
     }
   } catch (err) {
-    logger17.error("Config validate failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk7.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger19.error("Config validate failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk8.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 async function runExcludeList(globals) {
   try {
-    const config9 = loadConfig({ configDir: globals.config ? resolve9(globals.config) : void 0 });
+    const config9 = loadConfig({ configDir: globals.config ? resolve10(globals.config) : void 0 });
     const patterns = config9.ingest.exclude;
     if (globals.json) {
       console.log(JSON.stringify(patterns));
     } else {
       if (patterns.length === 0) {
-        console.log(chalk7.dim("No exclude patterns configured."));
+        console.log(chalk8.dim("No exclude patterns configured."));
       } else {
-        console.log(chalk7.bold("Excluded patterns:"));
+        console.log(chalk8.bold("Excluded patterns:"));
         for (const p of patterns)
           console.log(`  ${p}`);
       }
     }
   } catch (err) {
-    console.error(chalk7.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    console.error(chalk8.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 async function runExcludeAdd(pattern, globals) {
@@ -9761,7 +10641,7 @@ async function runExcludeAdd(pattern, globals) {
     const ingest = raw["ingest"] ?? {};
     const current = Array.isArray(ingest["exclude"]) ? ingest["exclude"] : [];
     if (current.includes(pattern)) {
-      console.log(chalk7.yellow(`Already excluded: ${pattern}`));
+      console.log(chalk8.yellow(`Already excluded: ${pattern}`));
       return;
     }
     ingest["exclude"] = [...current, pattern];
@@ -9769,7 +10649,7 @@ async function runExcludeAdd(pattern, globals) {
     const result = cortexConfigSchema.safeParse(raw);
     if (!result.success) {
       const issues = result.error.issues.map((i) => `  ${i.path.join(".")}: ${i.message}`).join("\n");
-      console.error(chalk7.red("Validation failed:\n") + chalk7.yellow(issues));
+      console.error(chalk8.red("Validation failed:\n") + chalk8.yellow(issues));
       return;
     }
     mkdirSync5(dirname2(configPath), { recursive: true });
@@ -9777,10 +10657,10 @@ async function runExcludeAdd(pattern, globals) {
     if (globals.json) {
       console.log(JSON.stringify({ added: pattern }));
     } else {
-      console.log(chalk7.green(`\u2713 Added exclude: ${pattern}`));
+      console.log(chalk8.green(`\u2713 Added exclude: ${pattern}`));
     }
   } catch (err) {
-    console.error(chalk7.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    console.error(chalk8.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 async function runExcludeRemove(pattern, globals) {
@@ -9790,7 +10670,7 @@ async function runExcludeRemove(pattern, globals) {
     const ingest = raw["ingest"] ?? {};
     const current = Array.isArray(ingest["exclude"]) ? ingest["exclude"] : [];
     if (!current.includes(pattern)) {
-      console.log(chalk7.yellow(`Pattern not found: ${pattern}`));
+      console.log(chalk8.yellow(`Pattern not found: ${pattern}`));
       return;
     }
     ingest["exclude"] = current.filter((p) => p !== pattern);
@@ -9798,7 +10678,7 @@ async function runExcludeRemove(pattern, globals) {
     const result = cortexConfigSchema.safeParse(raw);
     if (!result.success) {
       const issues = result.error.issues.map((i) => `  ${i.path.join(".")}: ${i.message}`).join("\n");
-      console.error(chalk7.red("Validation failed:\n") + chalk7.yellow(issues));
+      console.error(chalk8.red("Validation failed:\n") + chalk8.yellow(issues));
       return;
     }
     mkdirSync5(dirname2(configPath), { recursive: true });
@@ -9806,10 +10686,10 @@ async function runExcludeRemove(pattern, globals) {
     if (globals.json) {
       console.log(JSON.stringify({ removed: pattern }));
     } else {
-      console.log(chalk7.green(`\u2713 Removed exclude: ${pattern}`));
+      console.log(chalk8.green(`\u2713 Removed exclude: ${pattern}`));
     }
   } catch (err) {
-    console.error(chalk7.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    console.error(chalk8.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 function registerExcludeCommand(program2) {
@@ -9842,10 +10722,10 @@ function flattenObject(obj, prefix = "") {
 
 // packages/cli/dist/commands/privacy.js
 init_dist();
-import { resolve as resolve10 } from "node:path";
+import { resolve as resolve11 } from "node:path";
 import { readFileSync as readFileSync7, writeFileSync as writeFileSync4 } from "node:fs";
-import chalk8 from "chalk";
-var logger18 = createLogger("cli:privacy");
+import chalk9 from "chalk";
+var logger20 = createLogger("cli:privacy");
 function registerPrivacyCommand(program2) {
   const privacyCmd = program2.command("privacy").description("Manage privacy classifications");
   privacyCmd.command("set <directory> <level>").description("Set privacy level: standard, sensitive, restricted").action(async (directory, level) => {
@@ -9863,9 +10743,9 @@ function registerPrivacyCommand(program2) {
 }
 function getConfigFilePath2(globals) {
   if (globals.config) {
-    return resolve10(globals.config, "cortex.config.json");
+    return resolve11(globals.config, "cortex.config.json");
   }
-  return resolve10(process.cwd(), "cortex.config.json");
+  return resolve11(process.cwd(), "cortex.config.json");
 }
 function readConfigFile3(path) {
   try {
@@ -9881,8 +10761,8 @@ async function runPrivacySet(directory, level, globals) {
     if (globals.json) {
       console.log(JSON.stringify({ error: `Invalid level: ${level}. Must be: ${validLevels.join(", ")}` }));
     } else {
-      console.error(chalk8.red(`Invalid privacy level: ${level}`));
-      console.log(chalk8.dim(`Valid levels: ${validLevels.join(", ")}`));
+      console.error(chalk9.red(`Invalid privacy level: ${level}`));
+      console.log(chalk9.dim(`Valid levels: ${validLevels.join(", ")}`));
     }
     return;
   }
@@ -9897,22 +10777,22 @@ async function runPrivacySet(directory, level, globals) {
       privacy["directoryOverrides"] = {};
     }
     const overrides = privacy["directoryOverrides"];
-    const resolvedDir = resolve10(directory);
+    const resolvedDir = resolve11(directory);
     overrides[resolvedDir] = level;
     writeFileSync4(configPath, JSON.stringify(raw, null, 2) + "\n", "utf-8");
     if (globals.json) {
       console.log(JSON.stringify({ directory: resolvedDir, level, saved: true }));
     } else {
-      console.log(chalk8.green(`\u2713 Set ${resolvedDir} \u2192 ${level}`));
+      console.log(chalk9.green(`\u2713 Set ${resolvedDir} \u2192 ${level}`));
     }
   } catch (err) {
-    logger18.error("Privacy set failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk8.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger20.error("Privacy set failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk9.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 async function runPrivacyList(globals) {
   try {
-    const config9 = loadConfig({ configDir: globals.config ? resolve10(globals.config) : void 0 });
+    const config9 = loadConfig({ configDir: globals.config ? resolve11(globals.config) : void 0 });
     const overrides = config9.privacy.directoryOverrides;
     const entries = Object.entries(overrides);
     if (globals.json) {
@@ -9923,23 +10803,23 @@ async function runPrivacyList(globals) {
       return;
     }
     console.log("");
-    console.log(chalk8.bold.cyan("PRIVACY CLASSIFICATIONS"));
-    console.log(chalk8.dim("\u2500".repeat(50)));
-    console.log(chalk8.white(`Default level: ${config9.privacy.defaultLevel}`));
+    console.log(chalk9.bold.cyan("PRIVACY CLASSIFICATIONS"));
+    console.log(chalk9.dim("\u2500".repeat(50)));
+    console.log(chalk9.white(`Default level: ${config9.privacy.defaultLevel}`));
     console.log("");
     if (entries.length === 0) {
-      console.log(chalk8.dim("  No directory-specific overrides set."));
-      console.log(chalk8.dim("  Use `cortex privacy set <directory> <level>` to add one."));
+      console.log(chalk9.dim("  No directory-specific overrides set."));
+      console.log(chalk9.dim("  Use `cortex privacy set <directory> <level>` to add one."));
     } else {
       for (const [dir, level] of entries) {
-        const levelColor = level === "restricted" ? chalk8.red : level === "sensitive" ? chalk8.yellow : chalk8.green;
+        const levelColor = level === "restricted" ? chalk9.red : level === "sensitive" ? chalk9.yellow : chalk9.green;
         console.log(`  ${levelColor(level.padEnd(12))} ${dir}`);
       }
     }
     console.log("");
   } catch (err) {
-    logger18.error("Privacy list failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk8.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger20.error("Privacy list failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk9.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 async function runPrivacyLog(lastN, globals) {
@@ -9948,20 +10828,20 @@ async function runPrivacyLog(lastN, globals) {
     console.log(JSON.stringify({ entries: [], message: "No transmission log entries yet." }));
   } else {
     console.log("");
-    console.log(chalk8.bold.cyan("TRANSMISSION AUDIT LOG"));
-    console.log(chalk8.dim("\u2500".repeat(50)));
-    console.log(chalk8.dim("  No transmission log entries yet."));
-    console.log(chalk8.dim("  Entries will appear after LLM queries are made."));
+    console.log(chalk9.bold.cyan("TRANSMISSION AUDIT LOG"));
+    console.log(chalk9.dim("\u2500".repeat(50)));
+    console.log(chalk9.dim("  No transmission log entries yet."));
+    console.log(chalk9.dim("  Entries will appear after LLM queries are made."));
     console.log("");
   }
 }
 
 // packages/cli/dist/commands/contradictions.js
 init_dist();
-init_dist2();
-import { resolve as resolve11 } from "node:path";
-import chalk9 from "chalk";
-var logger19 = createLogger("cli:contradictions");
+init_dist4();
+import { resolve as resolve12 } from "node:path";
+import chalk10 from "chalk";
+var logger21 = createLogger("cli:contradictions");
 function registerContradictionsCommand(program2) {
   program2.command("contradictions").description("List active contradictions").option("--all", "Include resolved/dismissed", false).option("--severity <level>", "Filter by severity: low, medium, high").action(async (opts) => {
     const globals = program2.opts();
@@ -9969,7 +10849,7 @@ function registerContradictionsCommand(program2) {
   });
 }
 async function runContradictions(opts, globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve11(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve12(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   try {
     const contradictions = await getContradictions(store, opts.all, opts.severity);
@@ -9979,38 +10859,38 @@ async function runContradictions(opts, globals) {
       return;
     }
     console.log("");
-    console.log(chalk9.bold.cyan("CONTRADICTIONS"));
-    console.log(chalk9.dim("\u2500".repeat(60)));
+    console.log(chalk10.bold.cyan("CONTRADICTIONS"));
+    console.log(chalk10.dim("\u2500".repeat(60)));
     if (contradictions.length === 0) {
-      console.log(chalk9.dim("  No contradictions found."));
+      console.log(chalk10.dim("  No contradictions found."));
       console.log("");
       store.close();
       return;
     }
     for (const c of contradictions) {
-      const severityColor = c.severity === "high" ? chalk9.red : c.severity === "medium" ? chalk9.yellow : chalk9.dim;
+      const severityColor = c.severity === "high" ? chalk10.red : c.severity === "medium" ? chalk10.yellow : chalk10.dim;
       const statusIcon = c.status === "active" ? "\u26A0" : "\u2713";
       console.log("");
-      console.log(`${statusIcon} ${chalk9.bold(c.id.slice(0, 8))}  ${severityColor(`[${c.severity}]`)}  ${chalk9.dim(c.status)}`);
+      console.log(`${statusIcon} ${chalk10.bold(c.id.slice(0, 8))}  ${severityColor(`[${c.severity}]`)}  ${chalk10.dim(c.status)}`);
       console.log(`  ${c.description}`);
       const entity1 = await store.getEntity(c.entityIds[0]);
       const entity2 = await store.getEntity(c.entityIds[1]);
       const name1 = entity1 ? entity1.name : c.entityIds[0].slice(0, 8);
       const name2 = entity2 ? entity2.name : c.entityIds[1].slice(0, 8);
-      console.log(chalk9.dim(`  Between: ${name1} \u2194 ${name2}`));
+      console.log(chalk10.dim(`  Between: ${name1} \u2194 ${name2}`));
       if (c.suggestedResolution) {
-        console.log(chalk9.dim(`  Suggested: ${c.suggestedResolution}`));
+        console.log(chalk10.dim(`  Suggested: ${c.suggestedResolution}`));
       }
       if (c.status === "active") {
-        console.log(chalk9.dim(`  Resolve: cortex resolve ${c.id.slice(0, 8)} --action <supersede|dismiss|keep-old|both-valid>`));
+        console.log(chalk10.dim(`  Resolve: cortex resolve ${c.id.slice(0, 8)} --action <supersede|dismiss|keep-old|both-valid>`));
       }
     }
     console.log("");
-    console.log(chalk9.dim(`Total: ${contradictions.length} contradiction(s)`));
+    console.log(chalk10.dim(`Total: ${contradictions.length} contradiction(s)`));
     console.log("");
   } catch (err) {
-    logger19.error("Contradictions listing failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk9.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger21.error("Contradictions listing failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk10.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
   store.close();
 }
@@ -10023,10 +10903,10 @@ async function getContradictions(store, includeResolved, severity) {
 
 // packages/cli/dist/commands/resolve.js
 init_dist();
-init_dist2();
-import { resolve as resolve12 } from "node:path";
-import chalk10 from "chalk";
-var logger20 = createLogger("cli:resolve");
+init_dist4();
+import { resolve as resolve13 } from "node:path";
+import chalk11 from "chalk";
+var logger22 = createLogger("cli:resolve");
 var VALID_ACTIONS = ["supersede", "dismiss", "keep-old", "both-valid"];
 function registerResolveCommand(program2) {
   program2.command("resolve <contradiction-id>").description("Resolve a contradiction").requiredOption("--action <action>", "Resolution action: supersede, dismiss, keep-old, both-valid").action(async (contradictionId, opts) => {
@@ -10057,12 +10937,12 @@ async function runResolve(contradictionId, action, globals) {
         validActions: [...VALID_ACTIONS]
       }));
     } else {
-      console.error(chalk10.red(`Invalid action: ${action}`));
-      console.log(chalk10.dim(`Valid actions: ${VALID_ACTIONS.join(", ")}`));
+      console.error(chalk11.red(`Invalid action: ${action}`));
+      console.log(chalk11.dim(`Valid actions: ${VALID_ACTIONS.join(", ")}`));
     }
     return;
   }
-  const config9 = loadConfig({ configDir: globals.config ? resolve12(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve13(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   try {
     const contradiction = await findContradiction(store, contradictionId);
@@ -10070,7 +10950,7 @@ async function runResolve(contradictionId, action, globals) {
       if (globals.json) {
         console.log(JSON.stringify({ error: `Contradiction not found: ${contradictionId}` }));
       } else {
-        console.log(chalk10.yellow(`Contradiction not found: ${contradictionId}`));
+        console.log(chalk11.yellow(`Contradiction not found: ${contradictionId}`));
       }
       store.close();
       return;
@@ -10083,7 +10963,7 @@ async function runResolve(contradictionId, action, globals) {
           resolvedAction: contradiction.resolvedAction
         }));
       } else {
-        console.log(chalk10.yellow(`Contradiction already resolved (${contradiction.status}).`));
+        console.log(chalk11.yellow(`Contradiction already resolved (${contradiction.status}).`));
       }
       store.close();
       return;
@@ -10096,7 +10976,7 @@ async function runResolve(contradictionId, action, globals) {
       resolvedAction,
       resolvedAt
     });
-    logger20.info("Contradiction resolved", {
+    logger22.info("Contradiction resolved", {
       id: contradiction.id,
       action: resolvedAction,
       resolvedAt
@@ -10109,20 +10989,20 @@ async function runResolve(contradictionId, action, globals) {
         resolved: true
       }));
     } else {
-      console.log(chalk10.green(`\u2713 Resolved contradiction ${contradiction.id.slice(0, 8)} \u2192 ${action}`));
+      console.log(chalk11.green(`\u2713 Resolved contradiction ${contradiction.id.slice(0, 8)} \u2192 ${action}`));
       if (action === "supersede") {
-        console.log(chalk10.dim("  The newer entity will take precedence."));
+        console.log(chalk11.dim("  The newer entity will take precedence."));
       } else if (action === "dismiss") {
-        console.log(chalk10.dim("  Contradiction dismissed."));
+        console.log(chalk11.dim("  Contradiction dismissed."));
       } else if (action === "keep-old") {
-        console.log(chalk10.dim("  The older entity will be preserved."));
+        console.log(chalk11.dim("  The older entity will be preserved."));
       } else if (action === "both-valid") {
-        console.log(chalk10.dim("  Both entities marked as valid."));
+        console.log(chalk11.dim("  Both entities marked as valid."));
       }
     }
   } catch (err) {
-    logger20.error("Resolve failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk10.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger22.error("Resolve failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk11.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
   store.close();
 }
@@ -10133,11 +11013,11 @@ async function findContradiction(store, id) {
 
 // packages/cli/dist/commands/projects.js
 init_dist();
-init_dist2();
-import { resolve as resolve13, join as join5 } from "node:path";
+init_dist4();
+import { resolve as resolve14, join as join4 } from "node:path";
 import { existsSync as existsSync6 } from "node:fs";
-import chalk11 from "chalk";
-var logger21 = createLogger("cli:projects");
+import chalk12 from "chalk";
+var logger23 = createLogger("cli:projects");
 function registerProjectsCommand(program2) {
   const projects = program2.command("projects").description("Manage registered projects");
   projects.command("list").alias("ls").description("List all registered projects").action(async () => {
@@ -10164,41 +11044,41 @@ async function runList(globals) {
     return;
   }
   if (projects.length === 0) {
-    console.log(chalk11.yellow("No projects registered."));
-    console.log(chalk11.dim("Register a project with: cortex projects add <name> [path]"));
+    console.log(chalk12.yellow("No projects registered."));
+    console.log(chalk12.dim("Register a project with: cortex projects add <name> [path]"));
     return;
   }
   console.log("");
-  console.log(chalk11.bold.cyan("REGISTERED PROJECTS"));
-  console.log(chalk11.dim("\u2500".repeat(60)));
+  console.log(chalk12.bold.cyan("REGISTERED PROJECTS"));
+  console.log(chalk12.dim("\u2500".repeat(60)));
   for (const project of projects) {
-    const configExists = existsSync6(join5(project.path, "cortex.config.json"));
-    const statusIcon = configExists ? chalk11.green("\u2713") : chalk11.yellow("\u25CB");
-    console.log(`${statusIcon} ${chalk11.bold(project.name)}`);
-    console.log(`   Path: ${chalk11.dim(project.path)}`);
+    const configExists = existsSync6(join4(project.path, "cortex.config.json"));
+    const statusIcon = configExists ? chalk12.green("\u2713") : chalk12.yellow("\u25CB");
+    console.log(`${statusIcon} ${chalk12.bold(project.name)}`);
+    console.log(`   Path: ${chalk12.dim(project.path)}`);
     if (project.lastWatched) {
-      console.log(`   Last watched: ${chalk11.dim(new Date(project.lastWatched).toLocaleString())}`);
+      console.log(`   Last watched: ${chalk12.dim(new Date(project.lastWatched).toLocaleString())}`);
     }
     console.log("");
   }
-  console.log(chalk11.dim(`Total: ${projects.length} project(s)`));
+  console.log(chalk12.dim(`Total: ${projects.length} project(s)`));
 }
 async function runAdd(name, path, globals) {
-  const projectPath = resolve13(path ?? process.cwd());
+  const projectPath = resolve14(path ?? process.cwd());
   if (!existsSync6(projectPath)) {
-    console.error(chalk11.red(`Error: Path does not exist: ${projectPath}`));
+    console.error(chalk12.red(`Error: Path does not exist: ${projectPath}`));
     process.exit(1);
   }
   const existing = getProject(name);
-  const configPath = join5(projectPath, "cortex.config.json");
+  const configPath = join4(projectPath, "cortex.config.json");
   const hasConfig = existsSync6(configPath);
-  const config9 = loadConfig({ configDir: globals.config ? resolve13(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve14(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   try {
     const dbProject = await store.getProjectByName(name);
     if (existing && dbProject) {
-      console.error(chalk11.red(`Error: Project "${name}" is already registered at ${existing.path}`));
-      console.log(chalk11.dim("Use a different name or remove the existing project first."));
+      console.error(chalk12.red(`Error: Project "${name}" is already registered at ${existing.path}`));
+      console.log(chalk12.dim("Use a different name or remove the existing project first."));
       process.exit(1);
     }
     if (!existing) {
@@ -10219,18 +11099,18 @@ async function runAdd(name, path, globals) {
       return;
     }
     if (existing && !dbProject) {
-      console.log(chalk11.green(`\u2713 Project "${name}" synced to database`));
+      console.log(chalk12.green(`\u2713 Project "${name}" synced to database`));
     } else {
-      console.log(chalk11.green(`\u2713 Project "${name}" registered`));
+      console.log(chalk12.green(`\u2713 Project "${name}" registered`));
     }
     console.log(`   Path: ${projectPath}`);
     if (!hasConfig) {
       console.log("");
-      console.log(chalk11.yellow("\u26A0 No cortex.config.json found in this directory."));
-      console.log(chalk11.dim(`Run 'cd ${projectPath} && cortex init' to create one.`));
+      console.log(chalk12.yellow("\u26A0 No cortex.config.json found in this directory."));
+      console.log(chalk12.dim(`Run 'cd ${projectPath} && cortex init' to create one.`));
     } else {
       console.log("");
-      console.log(chalk11.dim(`Start watching with: cortex watch ${name}`));
+      console.log(chalk12.dim(`Start watching with: cortex watch ${name}`));
     }
   } finally {
     store.close();
@@ -10238,12 +11118,12 @@ async function runAdd(name, path, globals) {
 }
 async function runRemove(name, globals) {
   const existing = getProject(name);
-  const config9 = loadConfig({ configDir: globals.config ? resolve13(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve14(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   try {
     const dbProject = await store.getProjectByName(name);
     if (!existing && !dbProject) {
-      console.error(chalk11.red(`Error: Project "${name}" is not registered.`));
+      console.error(chalk12.red(`Error: Project "${name}" is not registered.`));
       process.exit(1);
     }
     if (existing) {
@@ -10256,8 +11136,8 @@ async function runRemove(name, globals) {
       console.log(JSON.stringify({ removed: name }));
       return;
     }
-    console.log(chalk11.green(`\u2713 Project "${name}" unregistered`));
-    console.log(chalk11.dim("Note: This only removes the registration. Project files are unchanged."));
+    console.log(chalk12.green(`\u2713 Project "${name}" unregistered`));
+    console.log(chalk12.dim("Note: This only removes the registration. Project files are unchanged."));
   } finally {
     store.close();
   }
@@ -10265,21 +11145,21 @@ async function runRemove(name, globals) {
 async function runShow(name, globals) {
   const project = getProject(name);
   if (!project) {
-    console.error(chalk11.red(`Error: Project "${name}" is not registered.`));
-    console.log(chalk11.dim("List registered projects with: cortex projects list"));
+    console.error(chalk12.red(`Error: Project "${name}" is not registered.`));
+    console.log(chalk12.dim("List registered projects with: cortex projects list"));
     process.exit(1);
   }
-  const configPath = join5(project.path, "cortex.config.json");
+  const configPath = join4(project.path, "cortex.config.json");
   const hasConfig = existsSync6(configPath);
   if (globals.json) {
     console.log(JSON.stringify({ ...project, hasConfig }, null, 2));
     return;
   }
   console.log("");
-  console.log(chalk11.bold.cyan(`PROJECT: ${project.name}`));
-  console.log(chalk11.dim("\u2500".repeat(40)));
+  console.log(chalk12.bold.cyan(`PROJECT: ${project.name}`));
+  console.log(chalk12.dim("\u2500".repeat(40)));
   console.log(`Path:         ${project.path}`);
-  console.log(`Config:       ${hasConfig ? chalk11.green("Found") : chalk11.yellow("Not found")}`);
+  console.log(`Config:       ${hasConfig ? chalk12.green("Found") : chalk12.yellow("Not found")}`);
   console.log(`Registered:   ${new Date(project.addedAt).toLocaleString()}`);
   if (project.lastWatched) {
     console.log(`Last watched: ${new Date(project.lastWatched).toLocaleString()}`);
@@ -10289,14 +11169,14 @@ async function runShow(name, globals) {
 
 // packages/cli/dist/commands/ingest.js
 init_dist();
+init_dist4();
 init_dist2();
 init_dist3();
-init_dist4();
-import { resolve as resolve14, isAbsolute, extname as extname3, join as join6, relative as relative2 } from "node:path";
+import { resolve as resolve15, isAbsolute, extname as extname3, join as join5, relative as relative2 } from "node:path";
 import { existsSync as existsSync7, readFileSync as readFileSync8, readdirSync, statSync as statSync4 } from "node:fs";
 import { createHash as createHash3 } from "node:crypto";
-import chalk12 from "chalk";
-var logger22 = createLogger("cli:ingest");
+import chalk13 from "chalk";
+var logger24 = createLogger("cli:ingest");
 var ALWAYS_SKIP_DIRS = /* @__PURE__ */ new Set([
   "node_modules",
   ".next",
@@ -10322,7 +11202,7 @@ function registerIngestCommand(program2) {
   });
 }
 function loadGitignorePatterns(projectRoot) {
-  const gitignorePath = join6(projectRoot, ".gitignore");
+  const gitignorePath = join5(projectRoot, ".gitignore");
   if (!existsSync7(gitignorePath))
     return () => false;
   try {
@@ -10349,7 +11229,7 @@ function collectFiles(dir, projectRoot, isIgnored) {
     return files;
   }
   for (const entry of entries) {
-    const full = join6(dir, entry);
+    const full = join5(dir, entry);
     const rel = relative2(projectRoot, full);
     if (ALWAYS_SKIP_DIRS.has(entry))
       continue;
@@ -10394,14 +11274,14 @@ async function runIngest(pattern, opts, globals) {
   if (opts.project) {
     const reg = getProject(opts.project);
     if (!reg) {
-      console.error(chalk12.red(`Error: Project "${opts.project}" is not registered.`));
-      console.log(chalk12.dim("Register it with: cortex projects add <name> <path>"));
+      console.error(chalk13.red(`Error: Project "${opts.project}" is not registered.`));
+      console.log(chalk13.dim("Register it with: cortex projects add <name> <path>"));
       process.exit(1);
     }
     projectRoot = reg.path;
   }
-  const config9 = loadConfig({ configDir: globals.config ? resolve14(globals.config) : projectRoot });
-  const resolvedPattern = isAbsolute(pattern) ? pattern : resolve14(process.cwd(), pattern);
+  const config9 = loadConfig({ configDir: globals.config ? resolve15(globals.config) : projectRoot });
+  const resolvedPattern = isAbsolute(pattern) ? pattern : resolve15(process.cwd(), pattern);
   let filePaths = [];
   let isDirectory = false;
   try {
@@ -10425,7 +11305,7 @@ async function runIngest(pattern, opts, globals) {
     if (existsSync7(dir)) {
       for (const entry of readdirSync(dir)) {
         if (regex.test(entry)) {
-          const full = join6(dir, entry);
+          const full = join5(dir, entry);
           try {
             if (statSync4(full).isFile())
               filePaths.push(full);
@@ -10436,13 +11316,13 @@ async function runIngest(pattern, opts, globals) {
     }
   } else {
     if (!existsSync7(resolvedPattern)) {
-      console.error(chalk12.red(`Error: File not found: ${resolvedPattern}`));
+      console.error(chalk13.red(`Error: File not found: ${resolvedPattern}`));
       process.exit(1);
     }
     filePaths.push(resolvedPattern);
   }
   if (filePaths.length === 0) {
-    console.log(chalk12.yellow("No files matched the pattern."));
+    console.log(chalk13.yellow("No files matched the pattern."));
     process.exit(0);
   }
   if (opts.estimate || filePaths.length > 1 && !opts.dryRun && !opts.yes) {
@@ -10457,53 +11337,53 @@ async function runIngest(pattern, opts, globals) {
     const budgetLimit = config9.llm.budget.monthlyLimitUsd;
     const budgetRemaining = Math.max(0, budgetLimit - currentSpend);
     console.log("");
-    console.log(chalk12.bold("Cost Estimate"));
-    console.log(chalk12.dim("\u2500".repeat(40)));
+    console.log(chalk13.bold("Cost Estimate"));
+    console.log(chalk13.dim("\u2500".repeat(40)));
     console.log(`  Files found:      ${estimate.totalFiles}`);
     console.log(`  Already cached:   ${estimate.cachedFiles} (no cost)`);
     console.log(`  Need processing:  ${estimate.newFiles}`);
-    console.log(`  Estimated cost:   ${chalk12.yellow("~$" + estimate.estimatedCostUsd.toFixed(2))}`);
+    console.log(`  Estimated cost:   ${chalk13.yellow("~$" + estimate.estimatedCostUsd.toFixed(2))}`);
     console.log("");
     console.log(`  Budget this month: $${currentSpend.toFixed(2)} / $${budgetLimit.toFixed(2)}`);
     console.log(`  Budget remaining:  $${budgetRemaining.toFixed(2)}`);
     if (estimate.estimatedCostUsd > budgetRemaining) {
       console.log("");
-      console.log(chalk12.red(`  WARNING: Estimated cost exceeds remaining budget!`));
-      console.log(chalk12.red(`  Ingestion will stop when budget is exhausted.`));
+      console.log(chalk13.red(`  WARNING: Estimated cost exceeds remaining budget!`));
+      console.log(chalk13.red(`  Ingestion will stop when budget is exhausted.`));
     }
     console.log("");
     store2.close();
     if (opts.estimate) {
-      console.log(chalk12.dim("Run with --yes to proceed without confirmation."));
+      console.log(chalk13.dim("Run with --yes to proceed without confirmation."));
       return;
     }
     if (estimate.newFiles === 0) {
-      console.log(chalk12.green("All files are already cached. Nothing to do."));
+      console.log(chalk13.green("All files are already cached. Nothing to do."));
       return;
     }
     if (!opts.yes && process.stdin.isTTY) {
-      process.stdout.write(chalk12.bold("Proceed? [y/N] "));
+      process.stdout.write(chalk13.bold("Proceed? [y/N] "));
       const answer = await new Promise((res) => {
         process.stdin.setEncoding("utf-8");
         process.stdin.once("data", (data) => res(data.toString().trim().toLowerCase()));
         setTimeout(() => res(""), 3e4);
       });
       if (answer !== "y" && answer !== "yes") {
-        console.log(chalk12.dim("Aborted."));
+        console.log(chalk13.dim("Aborted."));
         process.exit(0);
       }
     } else if (!opts.yes) {
-      console.log(chalk12.yellow("Use --yes to confirm batch operations in non-interactive mode."));
+      console.log(chalk13.yellow("Use --yes to confirm batch operations in non-interactive mode."));
       process.exit(1);
     }
   }
   if (!globals.quiet) {
     if (opts.dryRun) {
-      console.log(chalk12.bold(`
+      console.log(chalk13.bold(`
 \u{1F50D} Cortex Ingest (dry run) \u2014 ${filePaths.length} file(s)
 `));
     } else {
-      console.log(chalk12.bold(`
+      console.log(chalk13.bold(`
 \u26A1 Cortex Ingest \u2014 ${filePaths.length} file(s)
 `));
     }
@@ -10516,17 +11396,17 @@ async function runIngest(pattern, opts, globals) {
         const content = readFileSync8(filePath, "utf-8");
         const parser = getParser(ext, filePath, content);
         if (!parser) {
-          console.log(chalk12.dim(`  \u2212 ${filePath} \u2014 unsupported type`));
+          console.log(chalk13.dim(`  \u2212 ${filePath} \u2014 unsupported type`));
           continue;
         }
         const result = await parser.parse(content, filePath);
         totalSections += result.sections.length;
-        console.log(chalk12.dim(`  ~ ${filePath} \u2192 ${result.sections.length} sections (est. ${result.sections.length * 3} entities)`));
+        console.log(chalk13.dim(`  ~ ${filePath} \u2192 ${result.sections.length} sections (est. ${result.sections.length * 3} entities)`));
       } catch (err) {
-        console.log(chalk12.red(`  \u2717 ${filePath} \u2014 ${err instanceof Error ? err.message : String(err)}`));
+        console.log(chalk13.red(`  \u2717 ${filePath} \u2014 ${err instanceof Error ? err.message : String(err)}`));
       }
     }
-    console.log(chalk12.dim(`
+    console.log(chalk13.dim(`
 Dry run complete: ~${totalSections * 3} entities estimated across ${filePaths.length} file(s)`));
     return;
   }
@@ -10540,8 +11420,8 @@ Dry run complete: ~${totalSections * 3} entities estimated across ${filePaths.le
   const tracker = router.getTracker();
   const startingSpend = tracker.getCurrentMonthSpend();
   if (tracker.isBudgetExhausted()) {
-    console.error(chalk12.red("Monthly budget exhausted. Increase budget in config or wait for next month."));
-    console.log(chalk12.dim(`  Spent: $${tracker.getCurrentMonthSpend().toFixed(2)} / $${config9.llm.budget.monthlyLimitUsd.toFixed(2)}`));
+    console.error(chalk13.red("Monthly budget exhausted. Increase budget in config or wait for next month."));
+    console.log(chalk13.dim(`  Spent: $${tracker.getCurrentMonthSpend().toFixed(2)} / $${config9.llm.budget.monthlyLimitUsd.toFixed(2)}`));
     store.close();
     process.exit(1);
   }
@@ -10550,7 +11430,7 @@ Dry run complete: ~${totalSections * 3} entities estimated across ${filePaths.le
   if (!project) {
     project = await store.createProject({
       name: opts.project ?? "default",
-      rootPath: projectRoot ?? resolve14(config9.ingest.watchDirs[0] ?? "."),
+      rootPath: projectRoot ?? resolve15(config9.ingest.watchDirs[0] ?? "."),
       privacyLevel: config9.privacy.defaultLevel,
       fileCount: 0,
       entityCount: 0
@@ -10594,15 +11474,15 @@ Dry run complete: ~${totalSections * 3} entities estimated across ${filePaths.le
     store.close();
     return;
   }
-  console.log(chalk12.dim(`Ingesting ${filePaths.length} file(s)...
+  console.log(chalk13.dim(`Ingesting ${filePaths.length} file(s)...
 `));
   for (let i = 0; i < filePaths.length; i++) {
     const filePath = filePaths[i];
     if (tracker.isBudgetExhausted()) {
       console.log("");
-      console.log(chalk12.red.bold(`Budget exhausted after ${i} files. Stopping.`));
-      console.log(chalk12.dim(`  ${filePaths.length - i} file(s) remaining`));
-      console.log(chalk12.dim(`  Increase budget with: cortex config set llm.budget.monthlyLimitUsd <amount>`));
+      console.log(chalk13.red.bold(`Budget exhausted after ${i} files. Stopping.`));
+      console.log(chalk13.dim(`  ${filePaths.length - i} file(s) remaining`));
+      console.log(chalk13.dim(`  Increase budget with: cortex config set llm.budget.monthlyLimitUsd <amount>`));
       break;
     }
     try {
@@ -10610,41 +11490,41 @@ Dry run complete: ~${totalSections * 3} entities estimated across ${filePaths.le
       if (result.status === "ingested") {
         totalEntities += result.entityIds.length;
         totalRelationships += result.relationshipIds.length;
-        console.log(chalk12.green(`  \u2713 ${filePath}`) + chalk12.dim(` \u2192 ${result.entityIds.length} entities, ${result.relationshipIds.length} relationships`));
+        console.log(chalk13.green(`  \u2713 ${filePath}`) + chalk13.dim(` \u2192 ${result.entityIds.length} entities, ${result.relationshipIds.length} relationships`));
       } else if (result.status === "skipped") {
         skippedCount++;
-        console.log(chalk12.dim(`  \u2212 ${filePath} \u2014 skipped${result.error ? ` (${result.error})` : ""}`));
+        console.log(chalk13.dim(`  \u2212 ${filePath} \u2014 skipped${result.error ? ` (${result.error})` : ""}`));
       } else {
         errorCount++;
-        console.log(chalk12.red(`  \u2717 ${filePath} \u2014 failed: ${result.error}`));
+        console.log(chalk13.red(`  \u2717 ${filePath} \u2014 failed: ${result.error}`));
       }
     } catch (err) {
       errorCount++;
-      logger22.error("Ingest failed", { filePath, error: err instanceof Error ? err.message : String(err) });
-      console.log(chalk12.red(`  \u2717 ${filePath} \u2014 error: ${err instanceof Error ? err.message : String(err)}`));
+      logger24.error("Ingest failed", { filePath, error: err instanceof Error ? err.message : String(err) });
+      console.log(chalk13.red(`  \u2717 ${filePath} \u2014 error: ${err instanceof Error ? err.message : String(err)}`));
     }
   }
   const sessionCost = tracker.getCurrentMonthSpend() - startingSpend;
   console.log("");
-  console.log(chalk12.bold(`Total: ${totalEntities} entities, ${totalRelationships} relationships ingested`) + (opts.project ? chalk12.dim(` into project "${opts.project}"`) : ""));
+  console.log(chalk13.bold(`Total: ${totalEntities} entities, ${totalRelationships} relationships ingested`) + (opts.project ? chalk13.dim(` into project "${opts.project}"`) : ""));
   if (skippedCount > 0) {
-    console.log(chalk12.dim(`  ${skippedCount} file(s) skipped (cached/unchanged)`));
+    console.log(chalk13.dim(`  ${skippedCount} file(s) skipped (cached/unchanged)`));
   }
   if (errorCount > 0) {
-    console.log(chalk12.yellow(`  ${errorCount} file(s) failed`));
+    console.log(chalk13.yellow(`  ${errorCount} file(s) failed`));
   }
-  console.log(chalk12.dim(`  Session cost: ~$${sessionCost.toFixed(4)}`));
+  console.log(chalk13.dim(`  Session cost: ~$${sessionCost.toFixed(4)}`));
   store.close();
   process.exit(errorCount > 0 ? 1 : 0);
 }
 
 // packages/cli/dist/commands/models.js
 init_dist();
-init_dist3();
-import { resolve as resolve15 } from "node:path";
+init_dist2();
+import { resolve as resolve16 } from "node:path";
 import { spawnSync } from "node:child_process";
-import chalk13 from "chalk";
-var logger23 = createLogger("cli:models");
+import chalk14 from "chalk";
+var logger25 = createLogger("cli:models");
 function registerModelsCommand(program2) {
   const models = program2.command("models").description("Manage Ollama models");
   models.command("list").description("Show available Ollama models and which are configured").action(async () => {
@@ -10672,12 +11552,12 @@ function formatBytes2(bytes) {
   return `${mb.toFixed(0)} MB`;
 }
 async function runModelsList(globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve15(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve16(globals.config) : void 0 });
   const router = new Router({ config: config9 });
   const local = router.getLocalProvider();
   if (!local) {
-    console.log(chalk13.yellow("Local provider (Ollama) is not configured in this mode."));
-    console.log(chalk13.dim(`Current mode: ${router.getMode()} \u2014 set mode to hybrid, local-first, or local-only`));
+    console.log(chalk14.yellow("Local provider (Ollama) is not configured in this mode."));
+    console.log(chalk14.dim(`Current mode: ${router.getMode()} \u2014 set mode to hybrid, local-first, or local-only`));
     return;
   }
   const host = local.getHost();
@@ -10685,8 +11565,8 @@ async function runModelsList(globals) {
   const configuredEmbed = local.getEmbeddingModel();
   const available = await local.isAvailable();
   if (!available) {
-    console.error(chalk13.red(`\u2717 Ollama not reachable at ${host}`));
-    console.log(chalk13.dim("  Start with: ollama serve"));
+    console.error(chalk14.red(`\u2717 Ollama not reachable at ${host}`));
+    console.log(chalk14.dim("  Start with: ollama serve"));
     process.exit(1);
   }
   const modelList = await local.listModels();
@@ -10700,56 +11580,56 @@ async function runModelsList(globals) {
     return;
   }
   console.log("");
-  console.log(chalk13.bold(`Ollama Models (${host})`));
-  console.log(chalk13.dim("\u2500".repeat(50)));
+  console.log(chalk14.bold(`Ollama Models (${host})`));
+  console.log(chalk14.dim("\u2500".repeat(50)));
   if (modelList.length === 0) {
-    console.log(chalk13.dim("  No models installed."));
-    console.log(chalk13.dim("  Pull one with: cortex models pull mistral:7b-instruct-q5_K_M"));
+    console.log(chalk14.dim("  No models installed."));
+    console.log(chalk14.dim("  Pull one with: cortex models pull mistral:7b-instruct-q5_K_M"));
   } else {
     for (const m of modelList) {
       const isConfigured = m.name === configuredModel;
       const isEmbed = m.name === configuredEmbed;
-      const tag = isConfigured ? chalk13.green("\u2190 configured (primary)") : isEmbed ? chalk13.cyan("\u2190 configured (embeddings)") : "";
-      const sizeStr = chalk13.dim(formatBytes2(m.sizeBytes).padEnd(8));
+      const tag = isConfigured ? chalk14.green("\u2190 configured (primary)") : isEmbed ? chalk14.cyan("\u2190 configured (embeddings)") : "";
+      const sizeStr = chalk14.dim(formatBytes2(m.sizeBytes).padEnd(8));
       console.log(`  ${m.name.padEnd(40)} ${sizeStr} ${tag}`);
     }
   }
   console.log("");
-  console.log(chalk13.dim(`Tip: Set model with \`cortex config set llm.local.model <model>\``));
+  console.log(chalk14.dim(`Tip: Set model with \`cortex config set llm.local.model <model>\``));
   console.log("");
 }
 async function runModelsPull(model, globals) {
   if (!globals.quiet) {
-    console.log(chalk13.bold(`
-Pulling model: ${chalk13.cyan(model)}`));
-    console.log(chalk13.dim("This may take several minutes for large models...\n"));
+    console.log(chalk14.bold(`
+Pulling model: ${chalk14.cyan(model)}`));
+    console.log(chalk14.dim("This may take several minutes for large models...\n"));
   }
   const result = spawnSync("ollama", ["pull", model], { stdio: "inherit" });
   if (result.status !== 0) {
-    console.error(chalk13.red(`
+    console.error(chalk14.red(`
 \u2717 Failed to pull model "${model}"`));
-    console.log(chalk13.dim("  Make sure Ollama is running: ollama serve"));
+    console.log(chalk14.dim("  Make sure Ollama is running: ollama serve"));
     process.exit(result.status ?? 1);
   }
   if (!globals.quiet) {
-    console.log(chalk13.green(`
+    console.log(chalk14.green(`
 \u2713 Model "${model}" pulled successfully`));
-    console.log(chalk13.dim(`  Configure it: cortex config set llm.local.model ${model}`));
+    console.log(chalk14.dim(`  Configure it: cortex config set llm.local.model ${model}`));
   }
 }
 async function runModelsTest(globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve15(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve16(globals.config) : void 0 });
   const router = new Router({ config: config9 });
   const local = router.getLocalProvider();
   if (!local) {
-    console.log(chalk13.yellow("Local provider (Ollama) not configured."));
+    console.log(chalk14.yellow("Local provider (Ollama) not configured."));
     process.exit(1);
   }
   const host = local.getHost();
   const model = local.getModel();
   const embedModel = local.getEmbeddingModel();
   if (!globals.quiet && !globals.json) {
-    console.log(chalk13.bold("\nTesting Ollama setup...\n"));
+    console.log(chalk14.bold("\nTesting Ollama setup...\n"));
   }
   const checks = [];
   let reachable = false;
@@ -10780,7 +11660,7 @@ async function runModelsTest(globals) {
       inferenceTokens = result.outputTokens;
       inferenceOk = true;
     } catch (err) {
-      logger23.debug("Inference test failed", { error: err instanceof Error ? err.message : String(err) });
+      logger25.debug("Inference test failed", { error: err instanceof Error ? err.message : String(err) });
     }
   }
   const tokPerSec = inferenceMs > 0 ? Math.round(inferenceTokens / inferenceMs * 1e3) : 0;
@@ -10800,7 +11680,7 @@ async function runModelsTest(globals) {
       embedDims = embeddings[0]?.length ?? 0;
       embedOk = embedDims > 0;
     } catch (err) {
-      logger23.debug("Embedding test failed", { error: err instanceof Error ? err.message : String(err) });
+      logger25.debug("Embedding test failed", { error: err instanceof Error ? err.message : String(err) });
     }
   }
   checks.push({
@@ -10814,24 +11694,24 @@ async function runModelsTest(globals) {
     process.exit(allOk ? 0 : 4);
   }
   for (const c of checks) {
-    const icon = c.ok ? chalk13.green("\u2713") : chalk13.red("\u2717");
-    const detail = c.detail ? chalk13.dim(` (${c.detail})`) : "";
+    const icon = c.ok ? chalk14.green("\u2713") : chalk14.red("\u2717");
+    const detail = c.detail ? chalk14.dim(` (${c.detail})`) : "";
     console.log(`  ${icon} ${c.label}${detail}`);
   }
   if (allOk) {
-    console.log(chalk13.green("\n  \u2713 Ready for hybrid/local mode\n"));
+    console.log(chalk14.green("\n  \u2713 Ready for hybrid/local mode\n"));
     process.exit(0);
   } else {
-    console.log(chalk13.red("\n  \u2717 Setup incomplete \u2014 check Ollama installation\n"));
+    console.log(chalk14.red("\n  \u2717 Setup incomplete \u2014 check Ollama installation\n"));
     process.exit(4);
   }
 }
 async function runModelsInfo(globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve15(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve16(globals.config) : void 0 });
   const router = new Router({ config: config9 });
   const local = router.getLocalProvider();
   if (!local) {
-    console.log(chalk13.yellow("Local provider (Ollama) not configured."));
+    console.log(chalk14.yellow("Local provider (Ollama) not configured."));
     process.exit(1);
   }
   const model = local.getModel();
@@ -10849,9 +11729,9 @@ async function runModelsInfo(globals) {
     return;
   }
   console.log("");
-  console.log(chalk13.bold(`Ollama Model Info`));
-  console.log(chalk13.dim("\u2500".repeat(40)));
-  console.log(`  Model:      ${chalk13.cyan(model)}`);
+  console.log(chalk14.bold(`Ollama Model Info`));
+  console.log(chalk14.dim("\u2500".repeat(40)));
+  console.log(`  Model:      ${chalk14.cyan(model)}`);
   console.log(`  Host:       ${host}`);
   console.log(`  Context:    ${numCtx.toLocaleString()} tokens`);
   console.log(`  GPU layers: ${numGpu === -1 ? "auto-detect" : String(numGpu)}`);
@@ -10861,14 +11741,14 @@ async function runModelsInfo(globals) {
 
 // packages/cli/dist/commands/mcp.js
 import { spawn } from "node:child_process";
-import { resolve as resolve16, dirname as dirname3 } from "node:path";
+import { resolve as resolve17, dirname as dirname3 } from "node:path";
 import { existsSync as existsSync8, readFileSync as readFileSync9 } from "node:fs";
-import chalk14 from "chalk";
+import chalk15 from "chalk";
 function findPackageRoot(startDir) {
   let dir = startDir;
   for (let i = 0; i < 10; i++) {
     try {
-      const pkgPath = resolve16(dir, "package.json");
+      const pkgPath = resolve17(dir, "package.json");
       const pkg = JSON.parse(readFileSync9(pkgPath, "utf-8"));
       if (pkg.name === "@gzoo/cortex" || pkg.name === "gzoo-cortex")
         return dir;
@@ -10885,27 +11765,27 @@ function registerMcpCommand(program2) {
   program2.command("mcp").description("Start the Cortex MCP server (stdio transport for Claude Code)").option("--config-dir <path>", "Directory containing cortex.config.json").action(async (opts) => {
     const globals = program2.opts();
     const pkgRoot = findPackageRoot(import.meta.dirname);
-    const bundledMcp = resolve16(pkgRoot, "dist/cortex-mcp.mjs");
-    const workspaceMcp = resolve16(pkgRoot, "packages/mcp/dist/index.js");
+    const bundledMcp = resolve17(pkgRoot, "dist/cortex-mcp.mjs");
+    const workspaceMcp = resolve17(pkgRoot, "packages/mcp/dist/index.js");
     const mcpEntry = existsSync8(bundledMcp) ? bundledMcp : workspaceMcp;
     if (!existsSync8(mcpEntry)) {
-      console.error(chalk14.red("Error: MCP server not built."));
-      console.error(chalk14.dim(`Expected: ${mcpEntry}`));
-      console.error(chalk14.dim("Run npm run build first."));
+      console.error(chalk15.red("Error: MCP server not built."));
+      console.error(chalk15.dim(`Expected: ${mcpEntry}`));
+      console.error(chalk15.dim("Run npm run build first."));
       process.exit(1);
     }
     if (process.stdout.isTTY) {
-      process.stderr.write(chalk14.yellow("\n[cortex mcp] Starting MCP server on stdio.\n") + chalk14.dim("This process blocks. It is meant to be launched by Claude Code, not run manually.\n") + chalk14.dim("Register with: claude mcp add cortex --scope user -- node " + mcpEntry + "\n\n"));
+      process.stderr.write(chalk15.yellow("\n[cortex mcp] Starting MCP server on stdio.\n") + chalk15.dim("This process blocks. It is meant to be launched by Claude Code, not run manually.\n") + chalk15.dim("Register with: claude mcp add cortex --scope user -- node " + mcpEntry + "\n\n"));
     }
     const env = {
       ...process.env,
       CORTEX_LOG_LEVEL: "error"
     };
     if (opts.configDir) {
-      env["CORTEX_CONFIG_DIR"] = resolve16(opts.configDir);
+      env["CORTEX_CONFIG_DIR"] = resolve17(opts.configDir);
     }
     if (globals.config) {
-      env["CORTEX_CONFIG_DIR"] = resolve16(globals.config);
+      env["CORTEX_CONFIG_DIR"] = resolve17(globals.config);
     }
     const child = spawn(process.execPath, [mcpEntry], {
       stdio: "inherit",
@@ -10922,10 +11802,10 @@ function registerMcpCommand(program2) {
 
 // packages/cli/dist/commands/db.js
 init_dist();
-init_dist2();
-import { resolve as resolve17 } from "node:path";
-import chalk15 from "chalk";
-var logger24 = createLogger("cli:db");
+init_dist4();
+import { resolve as resolve18 } from "node:path";
+import chalk16 from "chalk";
+var logger26 = createLogger("cli:db");
 function registerDbCommand(program2) {
   const dbCmd = program2.command("db").description("Database maintenance");
   dbCmd.command("clean <path>").description("Hard-delete all entities, relationships, and files under a source path").option("--force", "Skip confirmation prompt").action(async (sourcePath, opts) => {
@@ -10946,14 +11826,14 @@ async function confirm(message, force) {
     return true;
   const { createInterface } = await import("node:readline");
   const rl = createInterface({ input: process.stdin, output: process.stderr });
-  const answer = await new Promise((resolve24) => {
-    rl.question(chalk15.yellow(message + " [y/N] "), resolve24);
+  const answer = await new Promise((resolve25) => {
+    rl.question(chalk16.yellow(message + " [y/N] "), resolve25);
   });
   rl.close();
   return answer.toLowerCase() === "y";
 }
 async function runDbClean(sourcePath, force, globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve17(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve18(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   try {
     const ok = await confirm(`Hard-delete all entities, relationships, and file records under "${sourcePath}"?`, force);
@@ -10965,19 +11845,19 @@ async function runDbClean(sourcePath, force, globals) {
     if (globals.json) {
       console.log(JSON.stringify(result));
     } else if (result.deletedEntities === 0) {
-      console.log(chalk15.yellow(`No entities found matching path: ${sourcePath}`));
+      console.log(chalk16.yellow(`No entities found matching path: ${sourcePath}`));
     } else {
-      console.log(chalk15.green(`\u2713 Deleted ${result.deletedEntities} entities, ${result.deletedRelationships} relationships, ${result.deletedFiles} file records`));
+      console.log(chalk16.green(`\u2713 Deleted ${result.deletedEntities} entities, ${result.deletedRelationships} relationships, ${result.deletedFiles} file records`));
     }
   } catch (err) {
-    logger24.error("db clean failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk15.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger26.error("db clean failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk16.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   } finally {
     store.close();
   }
 }
 async function runDbReset(force, globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve17(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve18(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   try {
     const stats = await store.getStats();
@@ -10985,7 +11865,7 @@ async function runDbReset(force, globals) {
       if (globals.json) {
         console.log(JSON.stringify({ reset: true, message: "Database was already empty" }));
       } else {
-        console.log(chalk15.dim("Database is already empty."));
+        console.log(chalk16.dim("Database is already empty."));
       }
       return;
     }
@@ -10998,17 +11878,17 @@ async function runDbReset(force, globals) {
     if (globals.json) {
       console.log(JSON.stringify({ reset: true }));
     } else {
-      console.log(chalk15.green("\u2713 Database reset. All entities, relationships, and files removed. Projects preserved."));
+      console.log(chalk16.green("\u2713 Database reset. All entities, relationships, and files removed. Projects preserved."));
     }
   } catch (err) {
-    logger24.error("db reset failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk15.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger26.error("db reset failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk16.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   } finally {
     store.close();
   }
 }
 async function runDbPrune(force, globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve17(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve18(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   try {
     const ok = await confirm("Remove all soft-deleted entities and their relationships?", force);
@@ -11021,14 +11901,14 @@ async function runDbPrune(force, globals) {
       console.log(JSON.stringify(result));
     } else {
       if (result.deletedEntities === 0) {
-        console.log(chalk15.dim("Nothing to prune \u2014 no soft-deleted entities found."));
+        console.log(chalk16.dim("Nothing to prune \u2014 no soft-deleted entities found."));
       } else {
-        console.log(chalk15.green(`\u2713 Pruned ${result.deletedEntities} entities and ${result.deletedRelationships} relationships`));
+        console.log(chalk16.green(`\u2713 Pruned ${result.deletedEntities} entities and ${result.deletedRelationships} relationships`));
       }
     }
   } catch (err) {
-    logger24.error("db prune failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk15.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger26.error("db prune failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk16.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   } finally {
     store.close();
   }
@@ -11036,10 +11916,10 @@ async function runDbPrune(force, globals) {
 
 // packages/cli/dist/commands/report.js
 init_dist();
-init_dist2();
-import { resolve as resolve18 } from "node:path";
-import chalk16 from "chalk";
-var logger25 = createLogger("cli:report");
+init_dist4();
+import { resolve as resolve19 } from "node:path";
+import chalk17 from "chalk";
+var logger27 = createLogger("cli:report");
 function registerReportCommand(program2) {
   program2.command("report").description("Post-ingestion summary \u2014 files, entities, relationships, contradictions, token costs").option("--failed", "Show full list of failed files with error messages", false).action(async (opts) => {
     const globals = program2.opts();
@@ -11047,7 +11927,7 @@ function registerReportCommand(program2) {
   });
 }
 async function runReport(opts, globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve18(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve19(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   try {
     const data = store.getReportData();
@@ -11057,30 +11937,30 @@ async function runReport(opts, globals) {
       return;
     }
     console.log("");
-    console.log(chalk16.bold.cyan("CORTEX REPORT"));
-    console.log(chalk16.dim(`Generated: ${new Date(data.generatedAt).toLocaleString()}`));
-    console.log(chalk16.dim("\u2500".repeat(60)));
+    console.log(chalk17.bold.cyan("CORTEX REPORT"));
+    console.log(chalk17.dim(`Generated: ${new Date(data.generatedAt).toLocaleString()}`));
+    console.log(chalk17.dim("\u2500".repeat(60)));
     const totalFiles = data.fileStatus.ingested + data.fileStatus.failed + data.fileStatus.skipped + data.fileStatus.pending;
     console.log("");
-    console.log(chalk16.bold("Files"));
-    console.log(`  ${chalk16.green("\u2713")} Ingested  ${String(data.fileStatus.ingested).padStart(5)}   ${chalk16.red("\u2717")} Failed    ${String(data.fileStatus.failed).padStart(5)}   ${chalk16.dim("\u2013")} Skipped   ${String(data.fileStatus.skipped).padStart(5)}   Total ${totalFiles}`);
+    console.log(chalk17.bold("Files"));
+    console.log(`  ${chalk17.green("\u2713")} Ingested  ${String(data.fileStatus.ingested).padStart(5)}   ${chalk17.red("\u2717")} Failed    ${String(data.fileStatus.failed).padStart(5)}   ${chalk17.dim("\u2013")} Skipped   ${String(data.fileStatus.skipped).padStart(5)}   Total ${totalFiles}`);
     if (data.failedFiles.length > 0) {
       if (opts.failed || data.failedFiles.length <= 5) {
         console.log("");
-        console.log(chalk16.dim("  Failed files:"));
+        console.log(chalk17.dim("  Failed files:"));
         for (const f of data.failedFiles) {
-          console.log(chalk16.red(`    \u2717 ${f.relativePath}`));
-          console.log(chalk16.dim(`      ${f.parseError}`));
+          console.log(chalk17.red(`    \u2717 ${f.relativePath}`));
+          console.log(chalk17.dim(`      ${f.parseError}`));
         }
       } else {
-        console.log(chalk16.dim(`  (${data.failedFiles.length} failed \u2014 run with --failed to see details)`));
+        console.log(chalk17.dim(`  (${data.failedFiles.length} failed \u2014 run with --failed to see details)`));
       }
     }
     const totalEntities = data.entityBreakdown.reduce((s, r) => s + r.count, 0);
     console.log("");
-    console.log(chalk16.bold(`Entities  (${totalEntities} active)`));
+    console.log(chalk17.bold(`Entities  (${totalEntities} active)`));
     if (data.entityBreakdown.length === 0) {
-      console.log(chalk16.dim("  None extracted yet."));
+      console.log(chalk17.dim("  None extracted yet."));
     } else {
       for (const row of data.entityBreakdown) {
         const bar = buildBar2(row.count / totalEntities, 16);
@@ -11089,13 +11969,13 @@ async function runReport(opts, globals) {
       }
     }
     if (data.supersededCount > 0) {
-      console.log(chalk16.dim(`  + ${data.supersededCount} superseded (merged duplicates)`));
+      console.log(chalk17.dim(`  + ${data.supersededCount} superseded (merged duplicates)`));
     }
     const totalRels = data.relationshipBreakdown.reduce((s, r) => s + r.count, 0);
     console.log("");
-    console.log(chalk16.bold(`Relationships  (${totalRels} total)`));
+    console.log(chalk17.bold(`Relationships  (${totalRels} total)`));
     if (data.relationshipBreakdown.length === 0) {
-      console.log(chalk16.dim("  None inferred yet."));
+      console.log(chalk17.dim("  None inferred yet."));
     } else {
       for (const row of data.relationshipBreakdown) {
         const bar = buildBar2(totalRels > 0 ? row.count / totalRels : 0, 16);
@@ -11104,43 +11984,43 @@ async function runReport(opts, globals) {
     }
     const totalContradictions = data.contradictions.active + data.contradictions.resolved + data.contradictions.dismissed;
     console.log("");
-    console.log(chalk16.bold(`Contradictions  (${totalContradictions} total)`));
+    console.log(chalk17.bold(`Contradictions  (${totalContradictions} total)`));
     if (totalContradictions === 0) {
-      console.log(chalk16.dim("  None detected."));
+      console.log(chalk17.dim("  None detected."));
     } else {
-      console.log(`  ${chalk16.red("Active")}   ${data.contradictions.active}   Resolved  ${data.contradictions.resolved}   Dismissed ${data.contradictions.dismissed}`);
+      console.log(`  ${chalk17.red("Active")}   ${data.contradictions.active}   Resolved  ${data.contradictions.resolved}   Dismissed ${data.contradictions.dismissed}`);
       if (data.contradictions.active > 0) {
-        console.log(chalk16.dim(`  Severity: ${data.contradictions.highSeverity} high / ${data.contradictions.mediumSeverity} medium / ${data.contradictions.lowSeverity} low`));
+        console.log(chalk17.dim(`  Severity: ${data.contradictions.highSeverity} high / ${data.contradictions.mediumSeverity} medium / ${data.contradictions.lowSeverity} low`));
         if (data.topContradictions.length > 0) {
           console.log("");
           for (const c of data.topContradictions) {
-            const sevColor = c.severity === "high" || c.severity === "critical" ? chalk16.red : c.severity === "medium" ? chalk16.yellow : chalk16.dim;
-            console.log(`  ${sevColor(`[${c.severity}]`)} ${chalk16.white(c.entityA)} ${chalk16.dim("\u2194")} ${chalk16.white(c.entityB)}`);
-            console.log(chalk16.dim(`         ${truncate(c.description, 100)}`));
-            console.log(chalk16.dim(`         cortex resolve ${c.id} --action <supersede|dismiss|keep-old|both-valid>`));
+            const sevColor = c.severity === "high" || c.severity === "critical" ? chalk17.red : c.severity === "medium" ? chalk17.yellow : chalk17.dim;
+            console.log(`  ${sevColor(`[${c.severity}]`)} ${chalk17.white(c.entityA)} ${chalk17.dim("\u2194")} ${chalk17.white(c.entityB)}`);
+            console.log(chalk17.dim(`         ${truncate(c.description, 100)}`));
+            console.log(chalk17.dim(`         cortex resolve ${c.id} --action <supersede|dismiss|keep-old|both-valid>`));
           }
           if (data.contradictions.active > data.topContradictions.length) {
-            console.log(chalk16.dim(`  ... and ${data.contradictions.active - data.topContradictions.length} more. Run \`cortex contradictions\` to see all.`));
+            console.log(chalk17.dim(`  ... and ${data.contradictions.active - data.topContradictions.length} more. Run \`cortex contradictions\` to see all.`));
           }
         }
       }
     }
     const { totalInput, totalOutput } = data.tokenEstimate;
     console.log("");
-    console.log(chalk16.bold("Token Usage  (from stored entity records)"));
+    console.log(chalk17.bold("Token Usage  (from stored entity records)"));
     if (totalInput === 0 && totalOutput === 0) {
-      console.log(chalk16.dim("  No token data available."));
+      console.log(chalk17.dim("  No token data available."));
     } else {
       console.log(`  Input   ${totalInput.toLocaleString().padStart(10)} tokens
   Output  ${totalOutput.toLocaleString().padStart(10)} tokens`);
     }
     console.log("");
-    console.log(chalk16.dim("\u2500".repeat(60)));
-    console.log(chalk16.dim("Tip: cortex contradictions  |  cortex costs  |  cortex status"));
+    console.log(chalk17.dim("\u2500".repeat(60)));
+    console.log(chalk17.dim("Tip: cortex contradictions  |  cortex costs  |  cortex status"));
     console.log("");
   } catch (err) {
-    logger25.error("Report failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk16.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger27.error("Report failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk17.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
   store.close();
 }
@@ -11151,21 +12031,21 @@ function truncate(str, maxLen) {
 function buildBar2(ratio, width) {
   const filled = Math.round(Math.min(1, ratio) * width);
   const empty = width - filled;
-  return chalk16.cyan("\u2588".repeat(filled)) + chalk16.dim("\u2591".repeat(empty));
+  return chalk17.cyan("\u2588".repeat(filled)) + chalk17.dim("\u2591".repeat(empty));
 }
 
 // packages/cli/dist/commands/serve.js
 init_dist();
-import { resolve as resolve21, dirname as dirname5 } from "node:path";
-import { readFileSync as readFileSync11, writeFileSync as writeFileSync5, mkdirSync as mkdirSync6, existsSync as existsSync9, appendFileSync } from "node:fs";
-import { homedir as homedir8 } from "node:os";
+import { resolve as resolve22, dirname as dirname5 } from "node:path";
+import { readFileSync as readFileSync12, writeFileSync as writeFileSync5, mkdirSync as mkdirSync6, existsSync as existsSync9, appendFileSync } from "node:fs";
+import { homedir as homedir9 } from "node:os";
 import { randomBytes } from "node:crypto";
 function findPkgRoot(startDir) {
   let dir = startDir;
   for (let i = 0; i < 10; i++) {
     try {
-      const pkgPath = resolve21(dir, "package.json");
-      const pkg = JSON.parse(readFileSync11(pkgPath, "utf-8"));
+      const pkgPath = resolve22(dir, "package.json");
+      const pkg = JSON.parse(readFileSync12(pkgPath, "utf-8"));
       if (pkg.name === "@gzoo/cortex" || pkg.name === "gzoo-cortex")
         return dir;
     } catch {
@@ -11177,7 +12057,7 @@ function findPkgRoot(startDir) {
   }
   return startDir;
 }
-var logger35 = createLogger("cli:serve");
+var logger37 = createLogger("cli:serve");
 function registerServeCommand(program2) {
   program2.command("serve").description("Start the Cortex API server + web dashboard").option("--port <port>", "Port to listen on (default: 3710)", "3710").option("--host <host>", "Host to bind to (default: 127.0.0.1)", "127.0.0.1").option("--auth-token <token>", "API authentication token (enables auth)").option("--no-watch", "Disable file watcher").action(async (opts) => {
     const globals = program2.opts();
@@ -11192,12 +12072,12 @@ function ensureAuthToken(host, config9) {
   if (config9.server.auth.token)
     return;
   const token = randomBytes(32).toString("hex");
-  const envDir = resolve21(homedir8(), ".cortex");
-  const envPath = resolve21(envDir, ".env");
+  const envDir = resolve22(homedir9(), ".cortex");
+  const envPath = resolve22(envDir, ".env");
   mkdirSync6(envDir, { recursive: true });
   const line = `CORTEX_SERVER_AUTH_TOKEN=${token}`;
   if (existsSync9(envPath)) {
-    const content = readFileSync11(envPath, "utf-8");
+    const content = readFileSync12(envPath, "utf-8");
     if (!content.includes("CORTEX_SERVER_AUTH_TOKEN")) {
       appendFileSync(envPath, `
 ${line}
@@ -11216,7 +12096,7 @@ ${line}
 }
 async function runServe(opts, globals) {
   try {
-    const config9 = loadConfig({ configDir: globals.config ? resolve21(globals.config) : void 0 });
+    const config9 = loadConfig({ configDir: globals.config ? resolve22(globals.config) : void 0 });
     if (opts.authToken) {
       config9.server.auth.enabled = true;
       config9.server.auth.token = opts.authToken;
@@ -11225,7 +12105,7 @@ async function runServe(opts, globals) {
     let webDistPath;
     const pkgRoot = findPkgRoot(import.meta.dirname);
     try {
-      const webPkgPath = resolve21(pkgRoot, "packages/web/dist");
+      const webPkgPath = resolve22(pkgRoot, "packages/web/dist");
       const { existsSync: existsSync11 } = await import("node:fs");
       if (existsSync11(webPkgPath)) {
         webDistPath = webPkgPath;
@@ -11233,9 +12113,9 @@ async function runServe(opts, globals) {
     } catch {
     }
     const { startServer: startServer2 } = await Promise.resolve().then(() => (init_dist6(), dist_exports2));
-    const pidDir = resolve21(homedir8(), ".cortex");
+    const pidDir = resolve22(homedir9(), ".cortex");
     mkdirSync6(pidDir, { recursive: true });
-    writeFileSync5(resolve21(pidDir, "cortex.pid"), String(process.pid));
+    writeFileSync5(resolve22(pidDir, "cortex.pid"), String(process.pid));
     await startServer2({
       config: config9,
       port: Number(opts.port),
@@ -11244,20 +12124,20 @@ async function runServe(opts, globals) {
       webDistPath
     });
   } catch (err) {
-    logger35.error("Server failed to start", { error: err instanceof Error ? err.message : String(err) });
+    logger37.error("Server failed to start", { error: err instanceof Error ? err.message : String(err) });
     console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 }
 
 // packages/cli/dist/commands/stop.js
-import { resolve as resolve22 } from "node:path";
-import { readFileSync as readFileSync12, unlinkSync, existsSync as existsSync10 } from "node:fs";
-import { homedir as homedir9 } from "node:os";
-var PID_FILE = resolve22(homedir9(), ".cortex", "cortex.pid");
+import { resolve as resolve23 } from "node:path";
+import { readFileSync as readFileSync13, unlinkSync, existsSync as existsSync10 } from "node:fs";
+import { homedir as homedir10 } from "node:os";
+var PID_FILE = resolve23(homedir10(), ".cortex", "cortex.pid");
 function readPid() {
   try {
-    const pid = Number(readFileSync12(PID_FILE, "utf-8").trim());
+    const pid = Number(readFileSync13(PID_FILE, "utf-8").trim());
     return Number.isFinite(pid) ? pid : null;
   } catch {
     return null;
@@ -11320,8 +12200,8 @@ function registerRestartCommand(program2) {
 }
 
 // packages/cli/dist/index.js
-import { readFileSync as readFileSync13 } from "node:fs";
-import { dirname as dirname6, resolve as resolve23 } from "node:path";
+import { readFileSync as readFileSync14 } from "node:fs";
+import { dirname as dirname6, resolve as resolve24 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function wireTokenPersistence(router, store) {
   const currentMonth = (/* @__PURE__ */ new Date()).toISOString().slice(0, 7) + "-01T00:00:00.000Z";
@@ -11333,22 +12213,23 @@ function wireTokenPersistence(router, store) {
 }
 function getVersion() {
   if (true)
-    return "0.6.7";
+    return "0.7.0";
   let dir = typeof __dirname !== "undefined" ? __dirname : dirname6(fileURLToPath2(import.meta.url));
   for (let i = 0; i < 6; i++) {
     try {
-      const pkg = JSON.parse(readFileSync13(resolve23(dir, "package.json"), "utf-8"));
+      const pkg = JSON.parse(readFileSync14(resolve24(dir, "package.json"), "utf-8"));
       if ((pkg.name === "@gzoo/cortex" || pkg.name === "gzoo-cortex") && pkg.version)
         return pkg.version;
     } catch {
     }
-    dir = resolve23(dir, "..");
+    dir = resolve24(dir, "..");
   }
   return "unknown";
 }
 var program = new Command();
 program.name("cortex").description("Local-first knowledge orchestrator \u2014 remembers what you decided, why, and where.").version(getVersion()).option("--config <path>", "Config file path").option("--verbose", "Show debug-level output", false).option("--quiet", "Suppress all non-error output", false).option("--json", "Output as JSON (for scripting)", false).option("--no-color", "Disable color output");
 registerInitCommand(program);
+registerDoctorCommand(program);
 registerWatchCommand(program);
 registerQueryCommand(program);
 registerFindCommand(program);

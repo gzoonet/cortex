@@ -8,8 +8,7 @@ import { resolve } from 'node:path';
 const CLI_PATH = resolve(import.meta.dirname, '../../packages/cli/dist/index.js');
 
 function runCLI(args: string, options: { cwd?: string; env?: Record<string, string> } = {}): string {
-  const env = { ...process.env, ...options.env };
-  // Remove CORTEX_CONFIG_PATH so the CLI finds config via cwd (tempDir), not the repo root
+  const env = { ...process.env, HOME: options.cwd ?? process.cwd(), ...options.env };
   delete env['CORTEX_CONFIG_PATH'];
   return execSync(`node "${CLI_PATH}" ${args}`, {
     cwd: options.cwd ?? process.cwd(),
@@ -17,6 +16,10 @@ function runCLI(args: string, options: { cwd?: string; env?: Record<string, stri
     encoding: 'utf-8',
     timeout: 15000,
   });
+}
+
+function globalConfigPath(homeDir: string): string {
+  return join(homeDir, '.cortex', 'cortex.config.json');
 }
 
 describe('CLI Integration', () => {
@@ -56,13 +59,13 @@ describe('CLI Integration', () => {
   describe('cortex init --non-interactive', () => {
     it('should create a config file', () => {
       runCLI('init --non-interactive', { cwd: tempDir });
-      const configPath = join(tempDir, 'cortex.config.json');
+      const configPath = globalConfigPath(tempDir);
       expect(existsSync(configPath)).toBe(true);
     });
 
     it('should create a valid config with defaults', () => {
       runCLI('init --non-interactive', { cwd: tempDir });
-      const configPath = join(tempDir, 'cortex.config.json');
+      const configPath = globalConfigPath(tempDir);
       const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
       expect(raw.llm.mode).toBe('cloud-first');
       expect(raw.llm.budget.monthlyLimitUsd).toBeDefined();
@@ -70,7 +73,7 @@ describe('CLI Integration', () => {
 
     it('should accept --mode flag', () => {
       runCLI('init --non-interactive --mode local-only', { cwd: tempDir });
-      const configPath = join(tempDir, 'cortex.config.json');
+      const configPath = globalConfigPath(tempDir);
       const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
       expect(raw.llm.mode).toBe('local-only');
     });
@@ -101,6 +104,7 @@ describe('CLI Integration', () => {
 
   describe('cortex status --json', () => {
     it('should return valid JSON', () => {
+      runCLI('init --non-interactive --mode local-only', { cwd: tempDir });
       const output = runCLI('status --json', { cwd: tempDir });
       const data = JSON.parse(output);
       expect(data.graph).toBeDefined();

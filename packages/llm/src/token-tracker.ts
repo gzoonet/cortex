@@ -2,20 +2,52 @@ import { createLogger, eventBus, type LLMTask, type TokenUsageRecord } from '@co
 
 const logger = createLogger('llm:token-tracker');
 
-// Cost per million tokens (USD) for Anthropic models
+// Cost per million tokens (USD). Rates are cache-miss / standard list prices.
 const MODEL_COSTS: Record<string, { input: number; output: number }> = {
   'claude-sonnet-4-5-20250929': { input: 3.0, output: 15.0 },
   'claude-haiku-4-5-20251001': { input: 0.80, output: 4.0 },
+  // DeepSeek V4 Flash (deepseek-chat / deepseek-reasoner aliases) — api-docs.deepseek.com
+  'deepseek-chat': { input: 0.14, output: 0.28 },
+  'deepseek-reasoner': { input: 0.14, output: 0.28 },
+  'deepseek-v4-flash': { input: 0.14, output: 0.28 },
+  // Google Gemini (generativelanguage.googleapis.com pricing)
+  'gemini-2.5-flash': { input: 0.15, output: 0.60 },
+  'gemini-2.0-flash': { input: 0.10, output: 0.40 },
+  'google/gemini-2.0-flash-001': { input: 0.10, output: 0.40 },
+  'google/gemini-2.0-flash-lite-001': { input: 0.075, output: 0.30 },
+  // Groq (groq.com/pricing)
+  'llama-3.3-70b-versatile': { input: 0.59, output: 0.79 },
+  'llama-3.1-8b-instant': { input: 0.05, output: 0.08 },
 };
 
+/** Fallback when model is not in MODEL_COSTS (Anthropic Sonnet-class). */
 const DEFAULT_COST = { input: 3.0, output: 15.0 };
+
+/** Conservative default for openai-compatible providers without a known model rate. */
+const OPENAI_COMPATIBLE_DEFAULT_COST = { input: 0.14, output: 0.28 };
 
 export function estimateCost(
   model: string,
   inputTokens: number,
   outputTokens: number,
+  provider?: string,
 ): number {
-  const costs = MODEL_COSTS[model] ?? DEFAULT_COST;
+  const costs = MODEL_COSTS[model];
+  if (!costs) {
+    const fallback =
+      provider === 'openai-compatible' ? OPENAI_COMPATIBLE_DEFAULT_COST : DEFAULT_COST;
+    logger.warn('Unknown model for cost estimation — using fallback rates', {
+      model,
+      provider: provider ?? 'unknown',
+      fallbackInputPerM: fallback.input,
+      fallbackOutputPerM: fallback.output,
+    });
+    return (
+      (inputTokens / 1_000_000) * fallback.input +
+      (outputTokens / 1_000_000) * fallback.output
+    );
+  }
+
   return (
     (inputTokens / 1_000_000) * costs.input +
     (outputTokens / 1_000_000) * costs.output
@@ -63,7 +95,7 @@ export class TokenTracker {
     outputTokens: number,
     latencyMs: number,
   ): TokenUsageRecord {
-    const costUsd = estimateCost(model, inputTokens, outputTokens);
+    const costUsd = estimateCost(model, inputTokens, outputTokens, provider);
 
     const record: TokenUsageRecord = {
       id: crypto.randomUUID(),
