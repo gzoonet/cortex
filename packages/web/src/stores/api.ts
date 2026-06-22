@@ -1,13 +1,24 @@
 const API_BASE = '/api/v1';
 
+const TOKEN_STORAGE_KEY = 'cortex-auth-token';
+
 function getAuthToken(): string | undefined {
   if (typeof window === 'undefined') return undefined;
 
+  // The server only embeds the token for an authenticated document load
+  // (e.g. opening the dashboard with ?token=...). Persist it for this tab so a
+  // plain refresh keeps working, while anonymous loads still receive no token.
   const win = window as typeof window & { __CORTEX_TOKEN__?: string };
-  if (win.__CORTEX_TOKEN__) return win.__CORTEX_TOKEN__;
+  const injected =
+    win.__CORTEX_TOKEN__ ??
+    document.querySelector('meta[name="cortex-auth-token"]')?.getAttribute('content') ??
+    undefined;
+  if (injected) {
+    try { sessionStorage.setItem(TOKEN_STORAGE_KEY, injected); } catch { /* storage unavailable */ }
+    return injected;
+  }
 
-  const meta = document.querySelector('meta[name="cortex-auth-token"]');
-  return meta?.getAttribute('content') ?? undefined;
+  try { return sessionStorage.getItem(TOKEN_STORAGE_KEY) ?? undefined; } catch { return undefined; }
 }
 
 function authHeaders(extra?: Record<string, string>): Record<string, string> {

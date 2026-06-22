@@ -85,6 +85,45 @@ export function registerConfigCommand(program: Command): void {
 
 const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
+const REDACTED_APIKEY = '<redacted: inline key — reference it via env:VAR_NAME instead>';
+const REDACTED_TOKEN = '<redacted: server auth token>';
+
+/** An apiKeySource is a secret only when it holds a raw inline key, not an `env:VAR_NAME` reference. */
+function isInlineApiKey(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && !value.startsWith('env:');
+}
+
+/**
+ * If `key`/`value` names a secret config field, return its redacted placeholder;
+ * otherwise undefined. Covers the cloud API key (only when stored inline rather
+ * than as an `env:VAR_NAME` reference) and the server auth token, so
+ * `cortex config` never prints credentials in clear text (CWE-312/319/532).
+ */
+function redactSecretField(key: string, value: unknown): string | undefined {
+  if (key === 'apiKeySource' && isInlineApiKey(value)) return REDACTED_APIKEY;
+  if (key === 'token' && typeof value === 'string' && value.length > 0) return REDACTED_TOKEN;
+  return undefined;
+}
+
+/** Returns a deep copy of `value` with every secret field replaced by a placeholder. */
+function redactSecrets(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactSecrets);
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = redactSecretField(k, v) ?? redactSecrets(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** Redact a value echoed back for a specific dotted config key path (handles scalar and nested writes). */
+function redactValueForKey(key: string, value: unknown): unknown {
+  const leaf = key.slice(key.lastIndexOf('.') + 1);
+  return redactSecretField(leaf, value) ?? redactSecrets(value);
+}
+
 function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
   const parts = path.split('.');
   let current: unknown = obj;
@@ -155,7 +194,7 @@ function readConfigFile(path: string): Record<string, unknown> {
 async function runConfigGet(key: string, globals: GlobalOptions): Promise<void> {
   try {
     const config = loadConfig({ configDir: globals.config ? resolve(globals.config) : undefined });
-    const value = getNestedValue(config as unknown as Record<string, unknown>, key);
+    const value = getNestedValue(redactSecrets(config) as Record<string, unknown>, key);
 
     if (value === undefined) {
       if (globals.json) {
@@ -202,10 +241,11 @@ async function runConfigSet(key: string, value: string, globals: GlobalOptions):
     mkdirSync(dirname(configPath), { recursive: true });
     writeFileSync(configPath, JSON.stringify(raw, null, 2) + '\n', 'utf-8');
 
+    const displayValue = redactValueForKey(key, parsed);
     if (globals.json) {
-      console.log(JSON.stringify({ key, value: parsed, saved: true }));
+      console.log(JSON.stringify({ key, value: displayValue, saved: true }));
     } else {
-      console.log(chalk.green(`✓ Set ${key} = ${JSON.stringify(parsed)}`));
+      console.log(chalk.green(`✓ Set ${key} = ${JSON.stringify(displayValue)}`));
     }
   } catch (err) {
     logger.error('Config set failed', { error: err instanceof Error ? err.message : String(err) });
@@ -217,9 +257,10 @@ async function runConfigList(globals: GlobalOptions): Promise<void> {
   try {
     const config = loadConfig({ configDir: globals.config ? resolve(globals.config) : undefined });
     const defaults = getDefaultConfig();
+    const safeConfig = redactSecrets(config) as Record<string, unknown>;
 
     if (globals.json) {
-      console.log(JSON.stringify(config));
+      console.log(JSON.stringify(safeConfig));
       return;
     }
 
@@ -228,7 +269,7 @@ async function runConfigList(globals: GlobalOptions): Promise<void> {
     console.log(chalk.dim('─'.repeat(50)));
 
     // Flatten and compare with defaults
-    const configFlat = flattenObject(config as unknown as Record<string, unknown>);
+    const configFlat = flattenObject(safeConfig);
     const defaultFlat = flattenObject(defaults as unknown as Record<string, unknown>);
 
     let hasNonDefault = false;

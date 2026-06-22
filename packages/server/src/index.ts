@@ -14,7 +14,7 @@ import { createQueryRoutes } from './routes/query.js';
 import { createContradictionRoutes } from './routes/contradictions.js';
 import { createStatusRoutes } from './routes/status.js';
 import { createEventRelay } from './ws/event-relay.js';
-import { createAuthMiddleware } from './middleware/auth.js';
+import { createAuthMiddleware, validateWsToken } from './middleware/auth.js';
 
 const logger = createLogger('server');
 
@@ -78,18 +78,16 @@ export async function startServer(options: ServerOptions): Promise<void> {
   // Trust reverse proxy (nginx) — required for correct IP detection and rate limiting
   app.set('trust proxy', 1);
 
-  // Middleware — CORS
+  // Middleware — CORS. Allow only the explicitly configured origins (e.g. the
+  // Vite dev server). The dashboard is served same-origin with the API, so it
+  // needs no CORS grant; reflecting arbitrary localhost:* origins would let any
+  // local page read the user's private knowledge graph cross-origin (CWE-346/942).
   const corsOrigin = config.server?.cors ?? [];
   app.use(cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (curl, server-to-server)
+      // Allow requests with no Origin header (curl, server-to-server, same-origin navigations)
       if (!origin) return callback(null, true);
-      // Check explicit whitelist first
       if (corsOrigin.includes(origin)) return callback(null, true);
-      // Allow any localhost/127.0.0.1 origin (any port)
-      if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
-        return callback(null, true);
-      }
       logger.warn('CORS rejected', { origin, allowed: corsOrigin });
       callback(new Error('CORS not allowed'));
     },
@@ -175,13 +173,17 @@ export async function startServer(options: ServerOptions): Promise<void> {
       return `${tokenMeta}\n${tokenScript}\n${html}`;
     };
 
-    // SPA fallback: serve index.html for all non-API routes
+    // SPA fallback: serve index.html for all non-API routes.
     const spaLimiter = rateLimit({ windowMs: 60_000, max: 60 });
-    app.get('*', spaLimiter, (_req, res) => {
+    app.get('*', spaLimiter, (req, res) => {
       const indexPath = resolve(webDist, 'index.html');
-      if (config.server.auth.enabled && config.server.auth.token) {
-        const html = injectAuthToken(readFileSync(indexPath, 'utf-8'));
-        res.type('html').send(html);
+      const authActive = config.server.auth.enabled && !!config.server.auth.token;
+      // Only embed the auth token for a requester that already proves possession
+      // of it (Authorization: Bearer, or ?token=... on the initial document load).
+      // Anonymous clients get the app shell WITHOUT the token, so the credential
+      // is never disclosed to unauthenticated callers (CWE-312/CWE-522).
+      if (authActive && validateWsToken(config, host, req.url, req.headers.authorization)) {
+        res.type('html').send(injectAuthToken(readFileSync(indexPath, 'utf-8')));
       } else {
         res.sendFile(indexPath);
       }

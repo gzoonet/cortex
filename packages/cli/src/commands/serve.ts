@@ -66,8 +66,12 @@ function ensureAuthToken(host: string, config: ReturnType<typeof loadConfig>): v
   config.server.auth.enabled = true;
   config.server.auth.token = token;
 
+  // Do not print the token itself — it is a credential and would land in
+  // terminal scrollback, shell history, and CI logs in clear text (CWE-312/532).
+  // It is persisted to the .env below; direct the user there instead.
   console.log(`\n  Auth token generated and saved to ${envPath}`);
-  console.log(`  Token: ${token}\n`);
+  console.log(`  It is required for API access — read it with:`);
+  console.log(`    grep CORTEX_SERVER_AUTH_TOKEN ${envPath}\n`);
 }
 
 async function runServe(
