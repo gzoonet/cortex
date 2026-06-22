@@ -28,14 +28,25 @@ interface WebSocketState {
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+const TOKEN_STORAGE_KEY = 'cortex-auth-token';
+
 function getAuthToken(): string | undefined {
   if (typeof window === 'undefined') return undefined;
 
+  // Mirror api.ts: prefer the server-injected token (authenticated load) and
+  // persist it per-tab so refreshes/reconnects keep working; fall back to the
+  // stored value. Anonymous loads receive no token from the server.
   const win = window as typeof window & { __CORTEX_TOKEN__?: string };
-  if (win.__CORTEX_TOKEN__) return win.__CORTEX_TOKEN__;
+  const injected =
+    win.__CORTEX_TOKEN__ ??
+    document.querySelector('meta[name="cortex-auth-token"]')?.getAttribute('content') ??
+    undefined;
+  if (injected) {
+    try { sessionStorage.setItem(TOKEN_STORAGE_KEY, injected); } catch { /* storage unavailable */ }
+    return injected;
+  }
 
-  const meta = document.querySelector('meta[name="cortex-auth-token"]');
-  return meta?.getAttribute('content') ?? undefined;
+  try { return sessionStorage.getItem(TOKEN_STORAGE_KEY) ?? undefined; } catch { return undefined; }
 }
 
 function buildWsUrl(): string {

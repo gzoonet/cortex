@@ -102,6 +102,41 @@ describe('CLI Integration', () => {
     });
   });
 
+  describe('cortex config secret redaction', () => {
+    beforeEach(() => {
+      runCLI('init --non-interactive', { cwd: tempDir });
+    });
+
+    it('never prints an inline API key (get/list/--json) but keeps env: references', () => {
+      const SECRET = 'sk-INLINE-APIKEY-DO-NOT-LEAK-0001';
+      const setOut = runCLI(`config set llm.cloud.apiKeySource ${SECRET}`, { cwd: tempDir });
+      expect(setOut).not.toContain(SECRET);
+
+      const get = runCLI('config get llm.cloud.apiKeySource', { cwd: tempDir });
+      expect(get).not.toContain(SECRET);
+      expect(get).toContain('<redacted');
+
+      expect(runCLI('config get llm.cloud', { cwd: tempDir })).not.toContain(SECRET);
+      expect(runCLI('config list', { cwd: tempDir })).not.toContain(SECRET);
+      expect(runCLI('config list --json', { cwd: tempDir })).not.toContain(SECRET);
+
+      // env:VAR_NAME references name an env var, not the secret — keep them visible.
+      runCLI('config set llm.cloud.apiKeySource env:CORTEX_TEST_KEY', { cwd: tempDir });
+      expect(runCLI('config get llm.cloud.apiKeySource', { cwd: tempDir }).trim()).toBe('env:CORTEX_TEST_KEY');
+    });
+
+    it('never prints the server auth token (get/list/--json/set echo)', () => {
+      const TOKEN = 'SERVER-AUTH-TOKEN-DO-NOT-LEAK-0002';
+      const setOut = runCLI(`config set server.auth.token ${TOKEN}`, { cwd: tempDir });
+      expect(setOut).not.toContain(TOKEN);
+
+      expect(runCLI('config get server.auth.token', { cwd: tempDir })).not.toContain(TOKEN);
+      expect(runCLI('config get server.auth', { cwd: tempDir })).not.toContain(TOKEN);
+      expect(runCLI('config list', { cwd: tempDir })).not.toContain(TOKEN);
+      expect(runCLI('config list --json', { cwd: tempDir })).not.toContain(TOKEN);
+    });
+  });
+
   describe('cortex status --json', () => {
     it('should return valid JSON', () => {
       runCLI('init --non-interactive --mode local-only', { cwd: tempDir });
