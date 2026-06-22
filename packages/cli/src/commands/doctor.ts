@@ -106,16 +106,23 @@ async function runDoctor(globals: GlobalOptions): Promise<void> {
       exitCode = 1;
     }
 
-    // API key (when cloud involved)
+    // API key (when cloud involved). Report presence only — never echo
+    // `apiKeySource`, which may hold a raw inline key rather than an
+    // `env:VAR_NAME` reference and would otherwise leak the credential to
+    // stdout/logs (and the --json output) in clear text (CWE-312/532).
     if (config.llm.mode !== 'local-only') {
-      const hasKey = resolveApiKey(config.llm.cloud.apiKeySource);
+      const apiKeySource = config.llm.cloud.apiKeySource;
+      const hasKey = resolveApiKey(apiKeySource);
+      const usesEnvRef = apiKeySource.startsWith('env:');
       checks.push({
         name: 'Cloud API key',
         ok: hasKey,
-        message: hasKey
-          ? config.llm.cloud.apiKeySource
-          : `Missing: ${config.llm.cloud.apiKeySource}`,
-        hint: hasKey ? undefined : 'Set the key in ~/.cortex/.env',
+        message: hasKey ? 'Configured' : 'Not configured',
+        hint: hasKey
+          ? usesEnvRef
+            ? undefined
+            : 'Reference the key via env:VAR_NAME instead of storing it inline in your config'
+          : 'Set the key referenced by llm.cloud.apiKeySource (see ~/.cortex/.env)',
       });
       if (!hasKey) exitCode = 1;
     }
