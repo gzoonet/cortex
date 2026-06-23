@@ -14,6 +14,7 @@ All notable changes to GZOO Cortex will be documented in this file.
 
 ### Fixed
 
+- **Dashboard** — the Knowledge Graph view now sends the auth token with its `/api/v1/graph` request (via `authHeaders()`), like every other view. Previously it relied on a reverse proxy injecting the token for it, so it failed once the API was properly secured.
 - **Dependencies** — upgrade `vite` 8.0.7 → 8.0.16 (web dev tooling) and `form-data` → 4.0.6, clearing Dependabot advisories GHSA-fx2h-pf6j-xcff, GHSA-v6wh-96g9-6wx3, and GHSA-hmw2-7cc7-3qxx.
 
 ## [0.7.0] - 2026-06-21

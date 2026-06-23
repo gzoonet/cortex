@@ -21,7 +21,7 @@ function getAuthToken(): string | undefined {
   try { return sessionStorage.getItem(TOKEN_STORAGE_KEY) ?? undefined; } catch { return undefined; }
 }
 
-function authHeaders(extra?: Record<string, string>): Record<string, string> {
+export function authHeaders(extra?: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...extra,

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { api } from '../stores/api';
+import { api, authHeaders } from '../stores/api';
 import { ForceGraph } from '../components/graph/ForceGraph';
 import { GraphFilters } from '../components/graph/Filters';
 import { GraphSidebar } from '../components/graph/Sidebar';
@@ -48,7 +48,7 @@ export function Graph() {
   useEffect(() => {
     api.getStatus()
       .then(() =>
-        fetch('/api/v1/graph?limit=2000', { credentials: 'include' })
+        fetch('/api/v1/graph?limit=2000', { credentials: 'include', headers: authHeaders() })
           .then((r) => r.json() as Promise<{ success: boolean; data: GraphData }>)
           .then((r) => {
             if (r.success) setRawData(r.data);
