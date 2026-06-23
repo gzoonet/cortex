@@ -97,6 +97,7 @@ var ingestConfigSchema = z.object({
   watchDirs: z.array(z.string()).default(["."]),
   exclude: z.array(z.string()).default([
     "node_modules",
+    ".next",
     "dist",
     "build",
     "out",
@@ -112,7 +113,7 @@ var ingestConfigSchema = z.object({
     ".DS_Store",
     "Thumbs.db"
   ]),
-  fileTypes: z.array(z.string()).default(["md", "ts", "tsx", "js", "jsx", "json", "yaml", "yml"]),
+  fileTypes: z.array(z.string()).default(["md", "ts", "tsx", "js", "jsx", "py", "json", "yaml", "yml"]),
   maxFileSize: z.number().positive().default(10485760),
   maxFilesPerDir: z.number().positive().default(1e4),
   maxTotalFiles: z.number().positive().default(5e4),
@@ -169,10 +170,10 @@ var llmConfigSchema = z.object({
   taskRouting: z.record(z.string(), z.enum(["auto", "local", "cloud"])).default({
     entity_extraction: "auto",
     relationship_inference: "auto",
-    contradiction_detection: "local",
+    contradiction_detection: "auto",
     conversational_query: "auto",
     context_ranking: "auto",
-    embedding_generation: "local"
+    embedding_generation: "auto"
   }),
   temperature: z.record(z.string(), z.number().min(0).max(2)).default({
     extraction: 0.1,
@@ -193,11 +194,11 @@ var privacyConfigSchema = z.object({
   logTransmissions: z.boolean().default(true),
   showTransmissionIndicator: z.boolean().default(true),
   secretPatterns: z.array(z.string()).default([
-    "(?i)(api[_-]?key|secret[_-]?key|access[_-]?token)\\s*[:=]\\s*[\\w\\-]{20,}",
+    "(api[_-]?key|secret[_-]?key|access[_-]?token)\\s*[:=]\\s*[\\w\\-]{20,}",
     "AKIA[0-9A-Z]{16}",
     "sk-ant-[a-zA-Z0-9\\-]{40,}",
     "ghp_[a-zA-Z0-9]{36}",
-    "(?i)password\\s*[:=]\\s*\\S{8,}"
+    "password\\s*[:=]\\s*\\S{8,}"
   ])
 });
 var serverAuthSchema = z.object({
@@ -233,6 +234,27 @@ var cortexConfigSchema = z.object({
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
+
+// packages/core/dist/config/deep-merge.js
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function deepMerge(base, override) {
+  const result = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    if (value === void 0)
+      continue;
+    const existing = result[key];
+    if (isPlainObject(existing) && isPlainObject(value)) {
+      result[key] = deepMerge(existing, value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+// packages/core/dist/config/loader.js
 function loadDotEnv() {
   const envPath = join(homedir(), ".cortex", ".env");
   if (!existsSync(envPath))
@@ -259,19 +281,23 @@ function loadDotEnv() {
   }
 }
 var CONFIG_FILENAME = "cortex.config.json";
-function findConfigFile(startDir) {
-  const searchPaths = [
-    startDir ? resolve(startDir, CONFIG_FILENAME) : null,
-    resolve(process.cwd(), CONFIG_FILENAME),
-    join(homedir(), ".cortex", CONFIG_FILENAME)
-  ].filter((p) => p !== null);
+function getGlobalConfigPath() {
+  return join(homedir(), ".cortex", CONFIG_FILENAME);
+}
+function getProjectConfigCandidates(startDir) {
   const envPath = process.env["CORTEX_CONFIG_PATH"];
   if (envPath) {
-    searchPaths.unshift(resolve(envPath));
+    return [resolve(envPath)];
   }
-  for (const p of searchPaths) {
-    if (existsSync(p))
-      return p;
+  return [
+    startDir ? resolve(startDir, CONFIG_FILENAME) : null,
+    resolve(process.cwd(), CONFIG_FILENAME)
+  ].filter((p) => p !== null);
+}
+function findProjectConfigFile(startDir) {
+  for (const candidate of getProjectConfigCandidates(startDir)) {
+    if (existsSync(candidate))
+      return candidate;
   }
   return null;
 }
@@ -283,56 +309,71 @@ function readConfigFile(filePath) {
     throw new CortexError(CONFIG_INVALID, "critical", "config", `Failed to read config file: ${filePath}: ${err instanceof Error ? err.message : String(err)}`, { filePath });
   }
 }
-function applyEnvOverrides(config8) {
+function loadLayeredFileConfig(configDir) {
+  let merged = {};
+  const globalPath = getGlobalConfigPath();
+  if (existsSync(globalPath)) {
+    merged = deepMerge(merged, readConfigFile(globalPath));
+  }
+  const projectPath = findProjectConfigFile(configDir);
+  if (projectPath && projectPath !== globalPath) {
+    merged = deepMerge(merged, readConfigFile(projectPath));
+  }
+  return merged;
+}
+function applyEnvOverrides(config9) {
   const env = process.env;
   if (env["CORTEX_LLM_MODE"]) {
-    config8.llm = { ...config8.llm, mode: env["CORTEX_LLM_MODE"] };
+    config9.llm = { ...config9.llm, mode: env["CORTEX_LLM_MODE"] };
   }
   if (env["CORTEX_SERVER_PORT"]) {
-    config8.server = { ...config8.server, port: parseInt(env["CORTEX_SERVER_PORT"], 10) };
+    config9.server = { ...config9.server, port: parseInt(env["CORTEX_SERVER_PORT"], 10) };
   }
   if (env["CORTEX_DB_PATH"]) {
-    config8.graph = { ...config8.graph, dbPath: env["CORTEX_DB_PATH"] };
+    config9.graph = { ...config9.graph, dbPath: env["CORTEX_DB_PATH"] };
   }
   if (env["CORTEX_LOG_LEVEL"]) {
-    config8.logging = { ...config8.logging, level: env["CORTEX_LOG_LEVEL"] };
+    config9.logging = { ...config9.logging, level: env["CORTEX_LOG_LEVEL"] };
   }
   if (env["CORTEX_BUDGET_LIMIT"]) {
-    const budget = { ...config8.llm?.budget, monthlyLimitUsd: parseFloat(env["CORTEX_BUDGET_LIMIT"]) };
-    config8.llm = { ...config8.llm, budget };
+    const budget = { ...config9.llm?.budget, monthlyLimitUsd: parseFloat(env["CORTEX_BUDGET_LIMIT"]) };
+    config9.llm = { ...config9.llm, budget };
   }
   if (env["CORTEX_OLLAMA_HOST"]) {
-    const local = { ...config8.llm?.local, host: env["CORTEX_OLLAMA_HOST"] };
-    config8.llm = { ...config8.llm, local };
+    const local = { ...config9.llm?.local, host: env["CORTEX_OLLAMA_HOST"] };
+    config9.llm = { ...config9.llm, local };
   }
   if (env["CORTEX_SERVER_AUTH_TOKEN"]) {
-    config8.server = {
-      ...config8.server,
-      auth: { ...config8.server?.auth, enabled: true, token: env["CORTEX_SERVER_AUTH_TOKEN"] }
+    config9.server = {
+      ...config9.server,
+      auth: { ...config9.server?.auth, enabled: true, token: env["CORTEX_SERVER_AUTH_TOKEN"] }
     };
   }
-  return config8;
+  return config9;
 }
 function loadConfig(options = {}) {
   loadDotEnv();
   const { configDir, overrides, requireFile = false } = options;
   let fileConfig = {};
-  let configPath;
   if (requireFile && configDir) {
     const candidate = resolve(configDir, CONFIG_FILENAME);
-    configPath = existsSync(candidate) ? candidate : null;
+    if (existsSync(candidate)) {
+      fileConfig = readConfigFile(candidate);
+    } else if (!existsSync(getGlobalConfigPath())) {
+      throw new CortexError(CONFIG_MISSING, "critical", "config", `No cortex.config.json found in ${configDir} or ~/.cortex/. Run \`cortex init\` to create one.`, void 0, "Run `cortex init` to create a configuration file.");
+    } else {
+      fileConfig = loadLayeredFileConfig(configDir);
+    }
   } else {
-    configPath = findConfigFile(configDir);
-  }
-  if (configPath) {
-    fileConfig = readConfigFile(configPath);
-  } else if (requireFile) {
-    throw new CortexError(CONFIG_MISSING, "critical", "config", "No cortex.config.json found. Run `cortex init` to create one.", void 0, "Run `cortex init` to create a configuration file.");
+    fileConfig = loadLayeredFileConfig(configDir);
+    if (requireFile && Object.keys(fileConfig).length === 0) {
+      throw new CortexError(CONFIG_MISSING, "critical", "config", "No cortex.config.json found. Run `cortex init` to create one.", void 0, "Run `cortex init` to create a configuration file.");
+    }
   }
   let merged = { ...fileConfig };
   merged = applyEnvOverrides(merged);
   if (overrides) {
-    merged = { ...merged, ...overrides };
+    merged = deepMerge(merged, overrides);
   }
   const result = cortexConfigSchema.safeParse(merged);
   if (!result.success) {
@@ -521,10 +562,10 @@ var AnthropicProvider = class {
     const result = await this.completeWithSystem(void 0, prompt, options);
     return result.content;
   }
-  async completeWithSystem(systemPrompt6, userPrompt, options, modelPreference = "primary") {
+  async completeWithSystem(systemPrompt7, userPrompt, options, modelPreference = "primary") {
     const model = this.getModel(modelPreference);
     try {
-      const systemMessages = systemPrompt6 ? this.buildSystemMessages(systemPrompt6) : void 0;
+      const systemMessages = systemPrompt7 ? this.buildSystemMessages(systemPrompt7) : void 0;
       const response = await this.client.messages.create({
         model,
         max_tokens: options?.maxTokens ?? 4096,
@@ -552,10 +593,10 @@ var AnthropicProvider = class {
   async *stream(prompt, options) {
     yield* this.streamWithSystem(void 0, prompt, options);
   }
-  async *streamWithSystem(systemPrompt6, userPrompt, options, modelPreference = "primary") {
+  async *streamWithSystem(systemPrompt7, userPrompt, options, modelPreference = "primary") {
     const model = this.getModel(modelPreference);
     try {
-      const systemMessages = systemPrompt6 ? this.buildSystemMessages(systemPrompt6) : void 0;
+      const systemMessages = systemPrompt7 ? this.buildSystemMessages(systemPrompt7) : void 0;
       const stream = this.client.messages.stream({
         model,
         max_tokens: options?.maxTokens ?? 4096,
@@ -594,15 +635,15 @@ var AnthropicProvider = class {
       return false;
     }
   }
-  buildSystemMessages(systemPrompt6) {
+  buildSystemMessages(systemPrompt7) {
     if (this.promptCaching) {
       return [{
         type: "text",
-        text: systemPrompt6,
+        text: systemPrompt7,
         cache_control: { type: "ephemeral" }
       }];
     }
-    return [{ type: "text", text: systemPrompt6 }];
+    return [{ type: "text", text: systemPrompt7 }];
   }
   mapError(err) {
     if (err instanceof Anthropic.AuthenticationError) {
@@ -624,6 +665,32 @@ var AnthropicProvider = class {
 
 // packages/llm/dist/providers/ollama.js
 var logger2 = createLogger("llm:ollama");
+var BLOCKED_HOST_PATTERNS = [
+  /^169\.254\./,
+  // AWS/Azure metadata link-local
+  /^fd[0-9a-f]{2}:/i,
+  // IPv6 unique local (fd00::/8)
+  /^fe80:/i
+  // IPv6 link-local
+];
+function validateOllamaHost(host) {
+  let parsed;
+  try {
+    parsed = new URL(host);
+  } catch {
+    throw new CortexError(LLM_PROVIDER_UNAVAILABLE, "high", "llm", `Invalid Ollama host URL: ${host}`, { host }, "Set a valid URL like http://localhost:11434", false);
+  }
+  const hostname = parsed.hostname;
+  for (const pattern of BLOCKED_HOST_PATTERNS) {
+    if (pattern.test(hostname)) {
+      throw new CortexError(LLM_PROVIDER_UNAVAILABLE, "high", "llm", `Ollama host "${hostname}" is blocked \u2014 it matches a link-local or cloud metadata IP range.`, { host }, "Use a non-link-local address for Ollama.", false);
+    }
+  }
+  const localhostNames = /* @__PURE__ */ new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
+  if (!localhostNames.has(hostname)) {
+    logger2.warn(`Ollama host is not localhost (${hostname}). Ensure the remote Ollama instance is trusted and network-secured.`);
+  }
+}
 var OllamaProvider = class {
   name = "ollama";
   type = "local";
@@ -634,6 +701,7 @@ var OllamaProvider = class {
   numGpu;
   timeoutMs;
   keepAlive;
+  streamInactivityTimeoutMs;
   capabilities = {
     supportedTasks: [
       LLMTask.ENTITY_EXTRACTION,
@@ -652,12 +720,14 @@ var OllamaProvider = class {
   };
   constructor(options = {}) {
     this.host = options.host ?? process.env["CORTEX_OLLAMA_HOST"] ?? "http://localhost:11434";
+    validateOllamaHost(this.host);
     this.model = options.model ?? "mistral:7b-instruct-q5_K_M";
     this.embeddingModel = options.embeddingModel ?? "nomic-embed-text";
     this.numCtx = options.numCtx ?? 8192;
     this.numGpu = options.numGpu ?? -1;
     this.timeoutMs = options.timeoutMs ?? 3e5;
     this.keepAlive = options.keepAlive ?? "5m";
+    this.streamInactivityTimeoutMs = 6e4;
     this.capabilities.maxContextTokens = this.numCtx;
   }
   getModel() {
@@ -667,7 +737,7 @@ var OllamaProvider = class {
     const result = await this.completeWithSystem(void 0, prompt, options);
     return result.content;
   }
-  async completeWithSystem(systemPrompt6, userPrompt, options, _modelPreference = "primary") {
+  async completeWithSystem(systemPrompt7, userPrompt, options, _modelPreference = "primary") {
     const numPredict = options?.maxTokens ? Math.min(options.maxTokens, Math.floor(this.numCtx / 2)) : void 0;
     const requestBody = {
       model: this.model,
@@ -682,8 +752,8 @@ var OllamaProvider = class {
       },
       keep_alive: this.keepAlive
     };
-    if (systemPrompt6) {
-      requestBody.system = systemPrompt6;
+    if (systemPrompt7) {
+      requestBody.system = systemPrompt7;
     }
     try {
       const controller = new AbortController();
@@ -725,7 +795,7 @@ var OllamaProvider = class {
   async *stream(prompt, options) {
     yield* this.streamWithSystem(void 0, prompt, options);
   }
-  async *streamWithSystem(systemPrompt6, userPrompt, options, _modelPreference = "primary") {
+  async *streamWithSystem(systemPrompt7, userPrompt, options, _modelPreference = "primary") {
     const streamNumPredict = options?.maxTokens ? Math.min(options.maxTokens, Math.floor(this.numCtx / 2)) : void 0;
     const requestBody = {
       model: this.model,
@@ -740,8 +810,8 @@ var OllamaProvider = class {
       },
       keep_alive: this.keepAlive
     };
-    if (systemPrompt6) {
-      requestBody.system = systemPrompt6;
+    if (systemPrompt7) {
+      requestBody.system = systemPrompt7;
     }
     try {
       const controller = new AbortController();
@@ -764,25 +834,43 @@ var OllamaProvider = class {
       const decoder = new TextDecoder();
       let inputTokens = 0;
       let outputTokens = 0;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done)
-          break;
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n").filter((line) => line.trim());
-        for (const line of lines) {
-          try {
-            const data = JSON.parse(line);
-            if (data.response) {
-              yield data.response;
+      const streamController = new AbortController();
+      let inactivityTimer = setTimeout(() => streamController.abort(), this.streamInactivityTimeoutMs);
+      try {
+        while (true) {
+          const readPromise = reader.read();
+          const raceResult = await Promise.race([
+            readPromise,
+            new Promise((_, reject) => {
+              streamController.signal.addEventListener("abort", () => reject(new Error("Stream inactivity timeout")), { once: true });
+              if (streamController.signal.aborted) {
+                reject(new Error("Stream inactivity timeout"));
+              }
+            })
+          ]);
+          const { done, value } = raceResult;
+          if (done)
+            break;
+          clearTimeout(inactivityTimer);
+          inactivityTimer = setTimeout(() => streamController.abort(), this.streamInactivityTimeoutMs);
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split("\n").filter((line) => line.trim());
+          for (const line of lines) {
+            try {
+              const data = JSON.parse(line);
+              if (data.response) {
+                yield data.response;
+              }
+              if (data.done) {
+                inputTokens = data.prompt_eval_count ?? 0;
+                outputTokens = data.eval_count ?? 0;
+              }
+            } catch {
             }
-            if (data.done) {
-              inputTokens = data.prompt_eval_count ?? 0;
-              outputTokens = data.eval_count ?? 0;
-            }
-          } catch {
           }
         }
+      } finally {
+        clearTimeout(inactivityTimer);
       }
       return {
         inputTokens,
@@ -940,7 +1028,12 @@ var OpenAICompatibleProvider = class {
     });
     this.primaryModel = options.primaryModel ?? "gpt-4o";
     this.fastModel = options.fastModel ?? "gpt-4o-mini";
-    this.isGemini = options.baseUrl.includes("generativelanguage.googleapis.com");
+    try {
+      const parsedUrl = new URL(options.baseUrl);
+      this.isGemini = parsedUrl.hostname === "generativelanguage.googleapis.com";
+    } catch {
+      this.isGemini = false;
+    }
     logger3.info("OpenAI-compatible provider initialized", {
       baseUrl: options.baseUrl,
       primaryModel: this.primaryModel,
@@ -958,12 +1051,12 @@ var OpenAICompatibleProvider = class {
     const result = await this.completeWithSystem(void 0, prompt, options);
     return result.content;
   }
-  async completeWithSystem(systemPrompt6, userPrompt, options, modelPreference = "primary") {
+  async completeWithSystem(systemPrompt7, userPrompt, options, modelPreference = "primary") {
     const model = this.getModel(modelPreference);
     try {
       const messages = [];
-      if (systemPrompt6) {
-        messages.push({ role: "system", content: systemPrompt6 });
+      if (systemPrompt7) {
+        messages.push({ role: "system", content: systemPrompt7 });
       }
       messages.push({ role: "user", content: userPrompt });
       const response = await this.client.chat.completions.create({
@@ -991,12 +1084,12 @@ var OpenAICompatibleProvider = class {
   async *stream(prompt, options) {
     yield* this.streamWithSystem(void 0, prompt, options);
   }
-  async *streamWithSystem(systemPrompt6, userPrompt, options, modelPreference = "primary") {
+  async *streamWithSystem(systemPrompt7, userPrompt, options, modelPreference = "primary") {
     const model = this.getModel(modelPreference);
     try {
       const messages = [];
-      if (systemPrompt6) {
-        messages.push({ role: "system", content: systemPrompt6 });
+      if (systemPrompt7) {
+        messages.push({ role: "system", content: systemPrompt7 });
       }
       messages.push({ role: "user", content: userPrompt });
       const stream = await this.client.chat.completions.create({
@@ -1064,24 +1157,62 @@ var OpenAICompatibleProvider = class {
 var logger4 = createLogger("llm:token-tracker");
 var MODEL_COSTS = {
   "claude-sonnet-4-5-20250929": { input: 3, output: 15 },
-  "claude-haiku-4-5-20251001": { input: 0.8, output: 4 }
+  "claude-haiku-4-5-20251001": { input: 0.8, output: 4 },
+  // DeepSeek V4 Flash (deepseek-chat / deepseek-reasoner aliases) — api-docs.deepseek.com
+  "deepseek-chat": { input: 0.14, output: 0.28 },
+  "deepseek-reasoner": { input: 0.14, output: 0.28 },
+  "deepseek-v4-flash": { input: 0.14, output: 0.28 },
+  // Google Gemini (generativelanguage.googleapis.com pricing)
+  "gemini-2.5-flash": { input: 0.15, output: 0.6 },
+  "gemini-2.0-flash": { input: 0.1, output: 0.4 },
+  "google/gemini-2.0-flash-001": { input: 0.1, output: 0.4 },
+  "google/gemini-2.0-flash-lite-001": { input: 0.075, output: 0.3 },
+  // Groq (groq.com/pricing)
+  "llama-3.3-70b-versatile": { input: 0.59, output: 0.79 },
+  "llama-3.1-8b-instant": { input: 0.05, output: 0.08 }
 };
 var DEFAULT_COST = { input: 3, output: 15 };
-function estimateCost(model, inputTokens, outputTokens) {
-  const costs = MODEL_COSTS[model] ?? DEFAULT_COST;
+var OPENAI_COMPATIBLE_DEFAULT_COST = { input: 0.14, output: 0.28 };
+function estimateCost(model, inputTokens, outputTokens, provider) {
+  const costs = MODEL_COSTS[model];
+  if (!costs) {
+    const fallback = provider === "openai-compatible" ? OPENAI_COMPATIBLE_DEFAULT_COST : DEFAULT_COST;
+    logger4.warn("Unknown model for cost estimation \u2014 using fallback rates", {
+      model,
+      provider: provider ?? "unknown",
+      fallbackInputPerM: fallback.input,
+      fallbackOutputPerM: fallback.output
+    });
+    return inputTokens / 1e6 * fallback.input + outputTokens / 1e6 * fallback.output;
+  }
   return inputTokens / 1e6 * costs.input + outputTokens / 1e6 * costs.output;
 }
+var MAX_IN_MEMORY_RECORDS = 1e4;
 var TokenTracker = class {
   records = [];
   monthlyBudgetUsd;
   warningThresholds;
   warningsFired = /* @__PURE__ */ new Set();
+  persistFn;
+  hydratedSpendUsd = 0;
   constructor(monthlyBudgetUsd = 25, warningThresholds = [0.5, 0.8, 0.9]) {
     this.monthlyBudgetUsd = monthlyBudgetUsd;
     this.warningThresholds = warningThresholds;
   }
+  /** Set a callback to persist each record (e.g. to SQLite) */
+  setPersist(fn) {
+    this.persistFn = fn;
+  }
+  /**
+   * Hydrate tracker with spend already recorded in SQLite.
+   * This ensures budget enforcement works across separate CLI processes.
+   */
+  hydrateSpend(currentMonthSpendUsd) {
+    this.hydratedSpendUsd = currentMonthSpendUsd;
+    this.checkBudget();
+  }
   record(requestId, task, provider, model, inputTokens, outputTokens, latencyMs) {
-    const costUsd = estimateCost(model, inputTokens, outputTokens);
+    const costUsd = estimateCost(model, inputTokens, outputTokens, provider);
     const record = {
       id: crypto.randomUUID(),
       requestId,
@@ -1095,8 +1226,28 @@ var TokenTracker = class {
       timestamp: (/* @__PURE__ */ new Date()).toISOString()
     };
     this.records.push(record);
+    this.trimOldRecords();
     this.checkBudget();
+    if (this.persistFn) {
+      try {
+        this.persistFn(record);
+      } catch {
+      }
+    }
     return record;
+  }
+  trimOldRecords() {
+    if (this.records.length <= MAX_IN_MEMORY_RECORDS)
+      return;
+    const currentMonth = (/* @__PURE__ */ new Date()).toISOString().slice(0, 7);
+    const currentMonthRecords = this.records.filter((r) => r.timestamp.startsWith(currentMonth));
+    const priorRecords = this.records.filter((r) => !r.timestamp.startsWith(currentMonth));
+    if (currentMonthRecords.length >= MAX_IN_MEMORY_RECORDS) {
+      this.records = currentMonthRecords.slice(-MAX_IN_MEMORY_RECORDS);
+    } else {
+      const keepFromPrior = MAX_IN_MEMORY_RECORDS - currentMonthRecords.length;
+      this.records = [...priorRecords.slice(-keepFromPrior), ...currentMonthRecords];
+    }
   }
   checkBudget() {
     const spent = this.getCurrentMonthSpend();
@@ -1132,7 +1283,8 @@ var TokenTracker = class {
   }
   getCurrentMonthSpend() {
     const currentMonth = (/* @__PURE__ */ new Date()).toISOString().slice(0, 7);
-    return this.records.filter((r) => r.timestamp.startsWith(currentMonth)).reduce((sum, r) => sum + r.estimatedCostUsd, 0);
+    const inMemorySpend = this.records.filter((r) => r.timestamp.startsWith(currentMonth)).reduce((sum, r) => sum + r.estimatedCostUsd, 0);
+    return Math.max(this.hydratedSpendUsd, 0) + inMemorySpend;
   }
   isBudgetExhausted() {
     return this.getCurrentMonthSpend() >= this.monthlyBudgetUsd;
@@ -1203,9 +1355,9 @@ var ResponseCache = class {
     if (!this.enabled)
       return;
     if (this.cache.size >= this.maxEntries) {
-      const oldest = [...this.cache.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt)[0];
-      if (oldest) {
-        this.cache.delete(oldest[0]);
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey !== void 0) {
+        this.cache.delete(firstKey);
       }
     }
     const key = this.buildKey(contentHash, promptId, promptVersion);
@@ -1419,34 +1571,34 @@ var Router = class _Router {
   static AVAILABILITY_TTL_MS = 6e4;
   // 1 minute
   constructor(options) {
-    const { config: config8 } = options;
-    this.config = config8;
-    this.mode = config8.llm.mode;
-    this.taskRouting = config8.llm.taskRouting;
+    const { config: config9 } = options;
+    this.config = config9;
+    this.mode = config9.llm.mode;
+    this.taskRouting = config9.llm.taskRouting;
     if (this.mode !== "local-only") {
       try {
-        if (config8.llm.cloud.provider === "openai-compatible") {
-          const baseUrl = config8.llm.cloud.baseUrl;
+        if (config9.llm.cloud.provider === "openai-compatible") {
+          const baseUrl = config9.llm.cloud.baseUrl;
           if (!baseUrl) {
             logger6.warn("openai-compatible provider requires llm.cloud.baseUrl \u2014 skipping cloud");
           } else {
             this.cloudProvider = new OpenAICompatibleProvider({
               baseUrl,
-              apiKey: options.apiKey ?? resolveApiKeySource(config8.llm.cloud.apiKeySource),
-              primaryModel: config8.llm.cloud.models.primary,
-              fastModel: config8.llm.cloud.models.fast,
-              timeoutMs: config8.llm.cloud.timeoutMs,
-              maxRetries: config8.llm.cloud.maxRetries
+              apiKey: options.apiKey ?? resolveApiKeySource(config9.llm.cloud.apiKeySource),
+              primaryModel: config9.llm.cloud.models.primary,
+              fastModel: config9.llm.cloud.models.fast,
+              timeoutMs: config9.llm.cloud.timeoutMs,
+              maxRetries: config9.llm.cloud.maxRetries
             });
           }
         } else {
           this.cloudProvider = new AnthropicProvider({
             apiKey: options.apiKey,
-            primaryModel: config8.llm.cloud.models.primary,
-            fastModel: config8.llm.cloud.models.fast,
-            timeoutMs: config8.llm.cloud.timeoutMs,
-            maxRetries: config8.llm.cloud.maxRetries,
-            promptCaching: config8.llm.cloud.promptCaching
+            primaryModel: config9.llm.cloud.models.primary,
+            fastModel: config9.llm.cloud.models.fast,
+            timeoutMs: config9.llm.cloud.timeoutMs,
+            maxRetries: config9.llm.cloud.maxRetries,
+            promptCaching: config9.llm.cloud.promptCaching
           });
         }
       } catch (err) {
@@ -1460,19 +1612,19 @@ var Router = class _Router {
     }
     if (this.mode !== "cloud-first" || !this.cloudProvider) {
       this.localProvider = new OllamaProvider({
-        host: config8.llm.local.host,
-        model: config8.llm.local.model,
-        embeddingModel: config8.llm.local.embeddingModel,
-        numCtx: config8.llm.local.numCtx,
-        numGpu: config8.llm.local.numGpu,
-        timeoutMs: config8.llm.local.timeoutMs,
-        keepAlive: config8.llm.local.keepAlive
+        host: config9.llm.local.host,
+        model: config9.llm.local.model,
+        embeddingModel: config9.llm.local.embeddingModel,
+        numCtx: config9.llm.local.numCtx,
+        numGpu: config9.llm.local.numGpu,
+        timeoutMs: config9.llm.local.timeoutMs,
+        keepAlive: config9.llm.local.keepAlive
       });
     }
-    this.tracker = new TokenTracker(config8.llm.budget.monthlyLimitUsd, config8.llm.budget.warningThresholds);
+    this.tracker = new TokenTracker(config9.llm.budget.monthlyLimitUsd, config9.llm.budget.warningThresholds);
     this.cache = new ResponseCache({
-      enabled: config8.llm.cache.enabled,
-      ttlMs: config8.llm.cache.ttlDays * 24 * 60 * 60 * 1e3
+      enabled: config9.llm.cache.enabled,
+      ttlMs: config9.llm.cache.ttlDays * 24 * 60 * 60 * 1e3
     });
     logger6.info("Router initialized", {
       mode: this.mode,
@@ -2096,6 +2248,61 @@ var config7 = {
   task: LLMTask.CONVERSATIONAL_QUERY
 };
 
+// packages/llm/dist/prompts/unified-query.js
+var unified_query_exports = {};
+__export(unified_query_exports, {
+  PROMPT_ID: () => PROMPT_ID6,
+  PROMPT_VERSION: () => PROMPT_VERSION6,
+  buildUserPrompt: () => buildUserPrompt6,
+  config: () => config8,
+  systemPrompt: () => systemPrompt6
+});
+var PROMPT_ID6 = "unified_query";
+var PROMPT_VERSION6 = "1.0.0";
+var systemPrompt6 = `You are Cortex, a knowledge assistant. Answer questions using the provided context from the user's knowledge graph.
+
+Rules:
+- Be concise and specific. Reference entities by name and type (e.g., "[Decision] Use PostgreSQL").
+- Mention the source file when citing a fact.
+- If contradictions exist between entities, acknowledge them.
+- If the context lacks enough information, say so briefly.
+- Do not make up information not present in the context.`;
+function buildUserPrompt6(vars) {
+  const parts = [];
+  if (vars.graphSummary) {
+    parts.push(`Graph stats:
+${vars.graphSummary}`);
+  }
+  if (vars.contextEntities.length > 0) {
+    const context = vars.contextEntities.map((e) => {
+      const file = e.sourceFile.replace(/\\/g, "/").split("/").pop() ?? e.sourceFile;
+      const rels = e.relationships.length > 0 ? `
+  Relations: ${e.relationships.map((r) => r.type).join(", ")}` : "";
+      return `[${e.type}] ${e.name}
+  ${e.content}
+  (${file})${rels}`;
+    }).join("\n\n");
+    parts.push(`Relevant entities:
+${context}`);
+  }
+  if (vars.contradictions && vars.contradictions.length > 0) {
+    const contradictionText = vars.contradictions.map((c) => `[${c.severity.toUpperCase()}] ${c.entityNames[0]} vs ${c.entityNames[1]}: ${c.description}`).join("\n");
+    parts.push(`Active contradictions:
+${contradictionText}`);
+  }
+  return `${parts.join("\n\n")}
+
+Question: ${vars.userQuery}`;
+}
+var config8 = {
+  provider: "cloud",
+  model: "primary",
+  temperature: 0.7,
+  maxTokens: 800,
+  task: LLMTask.CONVERSATIONAL_QUERY,
+  stream: true
+};
+
 // packages/graph/dist/sqlite-store.js
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
@@ -2238,6 +2445,37 @@ function up(db) {
   `);
 }
 
+// packages/graph/dist/migrations/002-add-indexes.js
+var MIGRATION_VERSION2 = 2;
+function up2(db) {
+  const currentVersion = db.prepare("SELECT MAX(version) as v FROM schema_version").get()?.v ?? 0;
+  if (currentVersion >= MIGRATION_VERSION2)
+    return;
+  db.exec(`
+    -- Composite index for common entity queries (project + status + soft-delete filter)
+    CREATE INDEX IF NOT EXISTS idx_entities_project_status_deleted
+      ON entities(project_id, status, deleted_at);
+
+    -- Contradiction lookups by status and severity
+    CREATE INDEX IF NOT EXISTS idx_contradictions_status_severity
+      ON contradictions(status, severity);
+
+    -- Contradiction lookups by entity
+    CREATE INDEX IF NOT EXISTS idx_contradictions_entity_a
+      ON contradictions(entity_id_a);
+
+    CREATE INDEX IF NOT EXISTS idx_contradictions_entity_b
+      ON contradictions(entity_id_b);
+
+    -- Files by project + status (used during watch/ingest)
+    CREATE INDEX IF NOT EXISTS idx_files_project_status
+      ON files(project_id, status);
+
+    INSERT OR IGNORE INTO schema_version (version, applied_at)
+      VALUES (${MIGRATION_VERSION2}, datetime('now'));
+  `);
+}
+
 // packages/graph/dist/sqlite-store.js
 function resolveHomePath(p) {
   return p.startsWith("~") ? p.replace("~", homedir3()) : p;
@@ -2325,11 +2563,15 @@ var SQLiteStore = class {
   constructor(options = {}) {
     const { dbPath = "~/.cortex/cortex.db", walMode = true, backupOnStartup = true } = options;
     this.dbPath = resolveHomePath(dbPath);
-    mkdirSync2(dirname(this.dbPath), { recursive: true });
+    mkdirSync2(dirname(this.dbPath), { recursive: true, mode: 448 });
     if (backupOnStartup) {
       this.backupSync();
     }
     this.db = new Database(this.dbPath);
+    try {
+      chmodSync(this.dbPath, 384);
+    } catch {
+    }
     if (walMode) {
       this.db.pragma("journal_mode = WAL");
     }
@@ -2340,6 +2582,7 @@ var SQLiteStore = class {
   migrate() {
     try {
       up(this.db);
+      up2(this.db);
     } catch (err) {
       throw new CortexError(GRAPH_DB_ERROR, "critical", "graph", `Migration failed: ${err instanceof Error ? err.message : String(err)}`, void 0, "Delete the database and restart.");
     }
@@ -2361,8 +2604,17 @@ var SQLiteStore = class {
   close() {
     this.db.close();
   }
+  transaction(fn) {
+    return this.db.transaction(fn)();
+  }
   // --- Entities ---
+  createEntitySync(entity) {
+    return this._createEntity(entity);
+  }
   async createEntity(entity) {
+    return this._createEntity(entity);
+  }
+  _createEntity(entity) {
     const id = randomUUID();
     const ts = now();
     this.db.prepare(`
@@ -2442,13 +2694,17 @@ var SQLiteStore = class {
     }
     let sql;
     if (query.search) {
+      const sanitizedSearch = query.search.replace(/[^a-zA-Z0-9\s]/g, " ").trim();
+      if (!sanitizedSearch) {
+        return [];
+      }
       sql = `
         SELECT e.* FROM entities e
         JOIN entities_fts fts ON fts.rowid = e.rowid
         WHERE fts.entities_fts MATCH ? AND ${conditions.join(" AND ")}
         ORDER BY rank
       `;
-      params.unshift(query.search);
+      params.unshift(sanitizedSearch);
     } else {
       sql = `
         SELECT * FROM entities
@@ -2484,24 +2740,101 @@ var SQLiteStore = class {
     const row = this.db.prepare("SELECT * FROM relationships WHERE id = ?").get(id);
     return row ? rowToRelationship(row) : null;
   }
-  async getRelationshipsForEntity(entityId, direction = "both") {
+  async getRelationshipsForEntity(entityId, direction = "both", limit = 200) {
     let sql;
     let params;
     if (direction === "out") {
-      sql = "SELECT * FROM relationships WHERE source_entity_id = ?";
-      params = [entityId];
+      sql = "SELECT * FROM relationships WHERE source_entity_id = ? LIMIT ?";
+      params = [entityId, limit];
     } else if (direction === "in") {
-      sql = "SELECT * FROM relationships WHERE target_entity_id = ?";
-      params = [entityId];
+      sql = "SELECT * FROM relationships WHERE target_entity_id = ? LIMIT ?";
+      params = [entityId, limit];
     } else {
-      sql = "SELECT * FROM relationships WHERE source_entity_id = ? OR target_entity_id = ?";
-      params = [entityId, entityId];
+      sql = "SELECT * FROM relationships WHERE source_entity_id = ? OR target_entity_id = ? LIMIT ?";
+      params = [entityId, entityId, limit];
     }
     const rows = this.db.prepare(sql).all(...params);
     return rows.map(rowToRelationship);
   }
+  async getRelationshipsForEntities(entityIds) {
+    if (entityIds.length === 0)
+      return [];
+    const placeholders = entityIds.map(() => "?").join(",");
+    const sql = `
+      SELECT * FROM relationships
+      WHERE source_entity_id IN (${placeholders})
+         OR target_entity_id IN (${placeholders})
+      LIMIT 2000
+    `;
+    const rows = this.db.prepare(sql).all(...entityIds, ...entityIds);
+    return rows.map(rowToRelationship);
+  }
   async deleteRelationship(id) {
     this.db.prepare("DELETE FROM relationships WHERE id = ?").run(id);
+  }
+  /**
+   * Delete all entities (and their relationships + FTS entries) for a specific source file.
+   * Used during re-ingestion to replace stale entities atomically.
+   */
+  deleteEntitiesBySourceFile(sourceFile) {
+    return this.db.transaction(() => {
+      const relResult = this.db.prepare(`
+        DELETE FROM relationships
+        WHERE source_entity_id IN (SELECT id FROM entities WHERE source_file = ?)
+           OR target_entity_id IN (SELECT id FROM entities WHERE source_file = ?)
+      `).run(sourceFile, sourceFile);
+      this.db.prepare(`
+        DELETE FROM entities_fts
+        WHERE rowid IN (SELECT rowid FROM entities WHERE source_file = ? AND deleted_at IS NULL)
+      `).run(sourceFile);
+      this.db.prepare(`
+        DELETE FROM contradictions
+        WHERE entity_id_a IN (SELECT id FROM entities WHERE source_file = ?)
+           OR entity_id_b IN (SELECT id FROM entities WHERE source_file = ?)
+      `).run(sourceFile, sourceFile);
+      const entityResult = this.db.prepare("DELETE FROM entities WHERE source_file = ?").run(sourceFile);
+      return {
+        deletedEntities: entityResult.changes,
+        deletedRelationships: relResult.changes
+      };
+    })();
+  }
+  /**
+   * Atomically try to acquire a processing lock for a file path.
+   * Returns true if lock acquired (status set to 'processing'), false if already locked.
+   * Uses SQLite's atomic UPDATE to prevent races between concurrent processes.
+   * projectId is required for new files (foreign key constraint on files table).
+   */
+  tryAcquireFileLock(filePath, projectId) {
+    const result = this.db.prepare(`
+      UPDATE files SET status = 'processing'
+      WHERE path = ? AND status != 'processing'
+    `).run(filePath);
+    if (result.changes > 0)
+      return true;
+    const exists = this.db.prepare("SELECT 1 FROM files WHERE path = ?").get(filePath);
+    if (!exists) {
+      try {
+        this.db.prepare(`
+          INSERT INTO files (id, path, relative_path, project_id, content_hash, file_type, size_bytes, last_modified, status)
+          VALUES (?, ?, '', ?, '', '', 0, '', 'processing')
+        `).run(randomUUID(), filePath, projectId);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+  /**
+   * Release a file processing lock (called after ingestion completes or fails).
+   * The upsertFile() call at the end of ingestion will set the final status.
+   */
+  releaseFileLock(filePath) {
+    this.db.prepare(`
+      UPDATE files SET status = 'pending'
+      WHERE path = ? AND status = 'processing'
+    `).run(filePath);
   }
   deleteBySourcePath(pathPrefix) {
     const normalized = pathPrefix.replace(/\//g, "\\");
@@ -2576,12 +2909,27 @@ var SQLiteStore = class {
     `).run(id, file.path, file.relativePath, file.projectId, file.contentHash, file.fileType, file.sizeBytes, file.lastModified, file.lastIngestedAt ?? null, JSON.stringify(file.entityIds), file.status, file.parseError ?? null);
     return { ...file, id };
   }
+  /**
+   * Check if a file has already been ingested with the given content hash.
+   * Synchronous for use in cost estimation without async overhead.
+   */
+  isFileCached(filePath, contentHash) {
+    const row = this.db.prepare("SELECT 1 FROM files WHERE path = ? AND content_hash = ? AND status = 'ingested'").get(filePath, contentHash);
+    return !!row;
+  }
   async getFile(path) {
     const row = this.db.prepare("SELECT * FROM files WHERE path = ?").get(path);
     return row ? rowToFile(row) : null;
   }
   async getFilesByProject(projectId) {
     const rows = this.db.prepare("SELECT * FROM files WHERE project_id = ?").all(projectId);
+    return rows.map(rowToFile);
+  }
+  async getRecentFiles(sinceDays = 7, limit = 20) {
+    const since = new Date(Date.now() - sinceDays * 864e5).toISOString();
+    const rows = this.db.prepare(`SELECT * FROM files
+       WHERE status = 'ingested' AND last_ingested_at >= ?
+       ORDER BY last_ingested_at DESC LIMIT ?`).all(since, limit);
     return rows.map(rowToFile);
   }
   // --- Projects ---
@@ -2597,12 +2945,45 @@ var SQLiteStore = class {
     return { ...project, id, createdAt: ts };
   }
   async getProject(id) {
-    const row = this.db.prepare("SELECT * FROM projects WHERE id = ?").get(id);
-    return row ? rowToProject(row) : null;
+    const row = this.db.prepare(`SELECT p.*,
+        (SELECT COUNT(*) FROM files WHERE project_id = p.id) AS live_file_count,
+        (SELECT COUNT(*) FROM entities WHERE project_id = p.id AND deleted_at IS NULL AND status != 'deleted') AS live_entity_count
+      FROM projects p WHERE p.id = ?`).get(id);
+    if (!row)
+      return null;
+    return {
+      ...rowToProject(row),
+      fileCount: row.live_file_count,
+      entityCount: row.live_entity_count
+    };
   }
   async listProjects() {
-    const rows = this.db.prepare("SELECT * FROM projects ORDER BY created_at DESC").all();
-    return rows.map(rowToProject);
+    const rows = this.db.prepare(`SELECT p.*,
+        (SELECT COUNT(*) FROM files WHERE project_id = p.id) AS live_file_count,
+        (SELECT COUNT(*) FROM entities WHERE project_id = p.id AND deleted_at IS NULL AND status != 'deleted') AS live_entity_count
+      FROM projects p ORDER BY p.created_at DESC`).all();
+    return rows.map((row) => ({
+      ...rowToProject(row),
+      fileCount: row.live_file_count,
+      entityCount: row.live_entity_count
+    }));
+  }
+  async getProjectByName(name) {
+    const row = this.db.prepare(`SELECT p.*,
+        (SELECT COUNT(*) FROM files WHERE project_id = p.id) AS live_file_count,
+        (SELECT COUNT(*) FROM entities WHERE project_id = p.id AND deleted_at IS NULL AND status != 'deleted') AS live_entity_count
+      FROM projects p WHERE p.name = ?`).get(name);
+    if (!row)
+      return null;
+    return {
+      ...rowToProject(row),
+      fileCount: row.live_file_count,
+      entityCount: row.live_entity_count
+    };
+  }
+  async deleteProject(id) {
+    const result = this.db.prepare("DELETE FROM projects WHERE id = ?").run(id);
+    return result.changes > 0;
   }
   // --- Contradictions ---
   async createContradiction(contradiction) {
@@ -2800,6 +3181,25 @@ var SQLiteStore = class {
       details
     };
   }
+  // --- Token Usage ---
+  insertTokenUsage(record) {
+    this.db.prepare(`
+      INSERT OR IGNORE INTO token_usage (id, request_id, task, provider, model, input_tokens, output_tokens, estimated_cost_usd, latency_ms, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(record.id, record.requestId, record.task, record.provider, record.model, record.inputTokens, record.outputTokens, record.estimatedCostUsd, record.latencyMs, record.timestamp);
+  }
+  getTokenUsage(since) {
+    if (since) {
+      return this.db.prepare("SELECT * FROM token_usage WHERE timestamp >= ? ORDER BY timestamp DESC").all(since);
+    }
+    return this.db.prepare("SELECT * FROM token_usage ORDER BY timestamp DESC").all();
+  }
+  getTokenUsageSummary(since) {
+    const whereClause = since ? "WHERE timestamp >= ?" : "";
+    const params = since ? [since] : [];
+    const row = this.db.prepare(`SELECT COALESCE(SUM(estimated_cost_usd), 0) as cost, COALESCE(SUM(input_tokens), 0) as input, COALESCE(SUM(output_tokens), 0) as output, COUNT(*) as count FROM token_usage ${whereClause}`).get(...params);
+    return { totalCostUsd: row.cost, totalInputTokens: row.input, totalOutputTokens: row.output, requestCount: row.count };
+  }
   // --- Graph visualization data ---
   getGraphData(options = {}) {
     const limit = options.limit ?? 2e3;
@@ -2920,6 +3320,93 @@ var AVG_CHARS_PER_TOKEN = 4;
 function estimateTokens(text) {
   return Math.ceil(text.length / AVG_CHARS_PER_TOKEN);
 }
+var FTS_STOP_WORDS = /* @__PURE__ */ new Set([
+  "a",
+  "an",
+  "the",
+  "and",
+  "or",
+  "but",
+  "in",
+  "on",
+  "at",
+  "to",
+  "for",
+  "of",
+  "with",
+  "by",
+  "from",
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "been",
+  "being",
+  "have",
+  "has",
+  "had",
+  "do",
+  "does",
+  "did",
+  "will",
+  "would",
+  "could",
+  "should",
+  "may",
+  "might",
+  "shall",
+  "can",
+  "need",
+  "must",
+  "what",
+  "which",
+  "who",
+  "how",
+  "why",
+  "when",
+  "where",
+  "that",
+  "this",
+  "these",
+  "those",
+  "it",
+  "its",
+  "me",
+  "my",
+  "you",
+  "your",
+  "we",
+  "our",
+  "they",
+  "their",
+  "he",
+  "she",
+  "i",
+  "all",
+  "any",
+  "each",
+  "some",
+  "no",
+  "not",
+  "so",
+  "yet",
+  "use",
+  "used",
+  "using",
+  "about",
+  "tell",
+  "know",
+  "get",
+  "got",
+  "make",
+  "made",
+  "see",
+  "give",
+  "go",
+  "come",
+  "take"
+]);
 var QueryEngine = class {
   sqliteStore;
   vectorStore;
@@ -2955,16 +3442,8 @@ var QueryEngine = class {
     }
     const privacyFiltered = await this.filterByPrivacy(contextEntities);
     const entityIds = new Set(privacyFiltered.map((e) => e.id));
-    const relationships = [];
-    for (const entity of privacyFiltered) {
-      const rels = await this.sqliteStore.getRelationshipsForEntity(entity.id);
-      for (const rel of rels) {
-        if (entityIds.has(rel.sourceEntityId) && entityIds.has(rel.targetEntityId)) {
-          relationships.push(rel);
-        }
-      }
-    }
-    const uniqueRels = [...new Map(relationships.map((r) => [r.id, r])).values()];
+    const allRels = await this.sqliteStore.getRelationshipsForEntities([...entityIds]);
+    const uniqueRels = allRels.filter((r) => entityIds.has(r.sourceEntityId) && entityIds.has(r.targetEntityId));
     const relTokens = uniqueRels.reduce((sum, r) => sum + estimateTokens(r.description ?? "") + 20, 0);
     const filteredTokens = privacyFiltered.reduce((sum, e) => sum + estimateTokens(e.content) + estimateTokens(e.name), 0);
     logger8.debug("Context assembled", {
@@ -3018,94 +3497,7 @@ var QueryEngine = class {
    * entities matching ANY meaningful keyword are returned.
    */
   buildFtsQuery(query) {
-    const stopWords = /* @__PURE__ */ new Set([
-      "a",
-      "an",
-      "the",
-      "and",
-      "or",
-      "but",
-      "in",
-      "on",
-      "at",
-      "to",
-      "for",
-      "of",
-      "with",
-      "by",
-      "from",
-      "is",
-      "are",
-      "was",
-      "were",
-      "be",
-      "been",
-      "being",
-      "have",
-      "has",
-      "had",
-      "do",
-      "does",
-      "did",
-      "will",
-      "would",
-      "could",
-      "should",
-      "may",
-      "might",
-      "shall",
-      "can",
-      "need",
-      "must",
-      "what",
-      "which",
-      "who",
-      "how",
-      "why",
-      "when",
-      "where",
-      "that",
-      "this",
-      "these",
-      "those",
-      "it",
-      "its",
-      "me",
-      "my",
-      "you",
-      "your",
-      "we",
-      "our",
-      "they",
-      "their",
-      "he",
-      "she",
-      "i",
-      "all",
-      "any",
-      "each",
-      "some",
-      "no",
-      "not",
-      "so",
-      "yet",
-      "use",
-      "used",
-      "using",
-      "about",
-      "tell",
-      "know",
-      "get",
-      "got",
-      "make",
-      "made",
-      "see",
-      "give",
-      "go",
-      "come",
-      "take"
-    ]);
-    const keywords = query.replace(/[^a-zA-Z0-9\s]/g, " ").toLowerCase().split(/\s+/).filter((w) => w.length >= 3 && !stopWords.has(w));
+    const keywords = (query ?? "").replace(/[^a-zA-Z0-9\s]/g, " ").toLowerCase().split(/\s+/).filter((w) => w.length >= 3 && !FTS_STOP_WORDS.has(w));
     if (keywords.length === 0) {
       return query.replace(/[^a-zA-Z0-9\s]/g, " ").trim();
     }
@@ -3156,19 +3548,19 @@ var QueryEngine = class {
 
 // packages/mcp/dist/store-factory.js
 async function createStoreBundle(configDir) {
-  const config8 = loadConfig({ configDir });
+  const config9 = loadConfig({ configDir });
   const store = new SQLiteStore({
-    dbPath: config8.graph.dbPath,
-    walMode: config8.graph.walMode,
+    dbPath: config9.graph.dbPath,
+    walMode: config9.graph.walMode,
     backupOnStartup: false
     // never backup on MCP startup — adds latency, not needed
   });
   const vectorStore = new VectorStore({
-    dbPath: config8.graph.vectorDbPath
+    dbPath: config9.graph.vectorDbPath
   });
   await vectorStore.initialize();
   const queryEngine = new QueryEngine(store, vectorStore, {
-    maxContextTokens: config8.llm.maxContextTokens,
+    maxContextTokens: config9.llm.maxContextTokens,
     maxResultEntities: 10
     // keep LLM context small for fast MCP responses
   });
@@ -3688,6 +4080,108 @@ var TypeScriptParser = class {
   }
 };
 
+// packages/ingest/dist/parsers/python.js
+import TreeSitter2 from "tree-sitter";
+import TreeSitterPython from "tree-sitter-python";
+var pythonLanguage = TreeSitterPython;
+function createParser2(language) {
+  const parser = new TreeSitter2();
+  parser.setLanguage(language);
+  return parser;
+}
+function nodeText2(node, source) {
+  return source.slice(node.startIndex, node.endIndex);
+}
+function extractName2(node, source) {
+  const nameNode = node.childForFieldName("name");
+  if (nameNode)
+    return nodeText2(nameNode, source);
+  return void 0;
+}
+var PythonParser = class {
+  supportedExtensions = ["py"];
+  parser;
+  constructor() {
+    this.parser = createParser2(pythonLanguage);
+  }
+  async parse(content, filePath) {
+    const tree = this.parser.parse(content);
+    const sections = [];
+    this.walkNode(tree.rootNode, content, sections);
+    return {
+      sections,
+      metadata: {
+        filePath,
+        format: "python",
+        sectionCount: sections.length
+      }
+    };
+  }
+  walkNode(node, source, sections) {
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i);
+      if (!child)
+        continue;
+      switch (child.type) {
+        case "function_definition":
+          sections.push({
+            type: "function",
+            title: extractName2(child, source),
+            content: nodeText2(child, source),
+            startLine: child.startPosition.row + 1,
+            endLine: child.endPosition.row + 1
+          });
+          break;
+        case "class_definition":
+          sections.push({
+            type: "class",
+            title: extractName2(child, source),
+            content: nodeText2(child, source),
+            startLine: child.startPosition.row + 1,
+            endLine: child.endPosition.row + 1
+          });
+          {
+            const body = child.childForFieldName("body");
+            if (body)
+              this.walkNode(body, source, sections);
+          }
+          break;
+        case "decorated_definition": {
+          const definition = child.namedChildren.find((n) => n.type === "function_definition" || n.type === "class_definition");
+          if (definition) {
+            const defType = definition.type === "class_definition" ? "class" : "function";
+            sections.push({
+              type: defType,
+              title: extractName2(definition, source),
+              content: nodeText2(child, source),
+              startLine: child.startPosition.row + 1,
+              endLine: child.endPosition.row + 1,
+              metadata: { decorated: true }
+            });
+          }
+          break;
+        }
+        case "comment":
+          sections.push({
+            type: "comment",
+            content: nodeText2(child, source),
+            startLine: child.startPosition.row + 1,
+            endLine: child.endPosition.row + 1
+          });
+          break;
+        case "import_statement":
+        case "import_from_statement":
+          break;
+        default:
+          if (child.childCount > 0) {
+            this.walkNode(child, source, sections);
+          }
+          break;
+      }
+    }
+  }
+};
+
 // packages/ingest/dist/parsers/json-parser.js
 function stripJsonComments(text) {
   let result = "";
@@ -3862,7 +4356,7 @@ function isConversationMarkdown(content) {
   const lines = content.split("\n");
   const headings = [];
   for (const line of lines) {
-    const m = line.match(/^#{1,3}\s+(.+)$/);
+    const m = line.match(/^#{1,3}\s+(\S.*)$/);
     if (m) {
       headings.push(m[1].trim());
       if (headings.length >= 2)
@@ -3944,7 +4438,7 @@ function parseConversationMarkdown(content) {
   };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const headingMatch = line.match(/^#{1,3}\s+(.+)$/);
+    const headingMatch = line.match(/^#{1,3}\s+(\S.*)$/);
     if (headingMatch) {
       flush(i);
       currentRole = headingMatch[1].trim();
@@ -3974,6 +4468,7 @@ var ConversationParser = class {
 // packages/ingest/dist/parsers/index.js
 var markdownParser = new MarkdownParser();
 var typescriptParser = new TypeScriptParser();
+var pythonParser = new PythonParser();
 var jsonParser = new JsonParser();
 var yamlParser = new YamlParser();
 var conversationParser = new ConversationParser();
@@ -3984,6 +4479,7 @@ var PARSER_REGISTRY = /* @__PURE__ */ new Map([
   ["tsx", typescriptParser],
   ["js", typescriptParser],
   ["jsx", typescriptParser],
+  ["py", pythonParser],
   ["json", jsonParser],
   ["yaml", yamlParser],
   ["yml", yamlParser]
@@ -4107,8 +4603,28 @@ import { readFileSync as readFileSync3, statSync as statSync2, realpathSync } fr
 import { relative, extname, resolve as resolve2 } from "node:path";
 import { createHash as createHash2 } from "node:crypto";
 
+// packages/ingest/dist/secret-patterns.js
+var logger10 = createLogger("ingest:secret-patterns");
+function compileSecretPattern(pattern) {
+  try {
+    let source = pattern;
+    let flags = "gi";
+    if (source.startsWith("(?i)")) {
+      source = source.slice(4);
+      flags = "gi";
+    }
+    return new RegExp(source, flags);
+  } catch {
+    logger10.warn("Invalid secret pattern, skipping", { pattern });
+    return null;
+  }
+}
+function compileSecretPatterns(patterns) {
+  return patterns.map((pattern) => compileSecretPattern(pattern)).filter((re) => re !== null);
+}
+
 // packages/ingest/dist/post-ingest.js
-var logger10 = createLogger("ingest:post-ingest");
+var logger11 = createLogger("ingest:post-ingest");
 async function runMergeDetection(entities, sourceFile, store, router, mergeConfidenceThreshold) {
   if (!router.getLocalProvider()) {
     return;
@@ -4144,7 +4660,7 @@ async function runMergeDetection(entities, sourceFile, store, router, mergeConfi
             timestamp: (/* @__PURE__ */ new Date()).toISOString(),
             source: "ingest:post-ingest"
           });
-          logger10.info("Entity merged", {
+          logger11.info("Entity merged", {
             survivor: entity.name,
             merged: candidate.name,
             confidence: result.data.confidence,
@@ -4152,7 +4668,7 @@ async function runMergeDetection(entities, sourceFile, store, router, mergeConfi
           });
         }
       } catch (err) {
-        logger10.debug("Merge detection failed for pair", {
+        logger11.debug("Merge detection failed for pair", {
           entity: entity.name,
           candidate: candidate.name,
           error: err instanceof Error ? err.message : String(err)
@@ -4225,14 +4741,14 @@ async function runContradictionDetection(entities, sourceFile, projectId, privac
             timestamp: (/* @__PURE__ */ new Date()).toISOString(),
             source: "ingest:post-ingest"
           });
-          logger10.info("Contradiction detected", {
+          logger11.info("Contradiction detected", {
             entityA: entity.name,
             entityB: candidate.name,
             severity: result.data.severity
           });
         }
       } catch (err) {
-        logger10.debug("Contradiction detection failed for pair", {
+        logger11.debug("Contradiction detection failed for pair", {
           entity: entity.name,
           candidate: candidate.name,
           error: err instanceof Error ? err.message : String(err)
@@ -4243,7 +4759,7 @@ async function runContradictionDetection(entities, sourceFile, projectId, privac
 }
 
 // packages/ingest/dist/pipeline.js
-var logger11 = createLogger("ingest:pipeline");
+var logger12 = createLogger("ingest:pipeline");
 var IngestionPipeline = class {
   router;
   store;
@@ -4251,10 +4767,27 @@ var IngestionPipeline = class {
   // Shared across all ingestFile calls — prevents the same entity pair from being
   // evaluated twice when multiple files ingest in the same batch.
   checkedContradictionPairs = /* @__PURE__ */ new Set();
+  // Pre-compiled secret patterns for scrubbing before cloud LLM calls
+  compiledSecretPatterns;
   constructor(router, store, options) {
     this.router = router;
     this.store = store;
     this.options = options;
+    this.compiledSecretPatterns = compileSecretPatterns(options.secretPatterns ?? []);
+  }
+  /**
+   * Scrub secrets from content before sending to cloud LLMs.
+   * Only applied for standard privacy (sensitive/restricted use local provider).
+   */
+  scrubSecrets(content) {
+    if (this.compiledSecretPatterns.length === 0)
+      return content;
+    let scrubbed = content;
+    for (const re of this.compiledSecretPatterns) {
+      re.lastIndex = 0;
+      scrubbed = scrubbed.replace(re, "[SECRET_REDACTED]");
+    }
+    return scrubbed;
   }
   async ingestFile(filePath) {
     try {
@@ -4262,7 +4795,7 @@ var IngestionPipeline = class {
       const projectRoot = resolve2(this.options.projectRoot);
       const rel = relative(projectRoot, realPath);
       if (rel.startsWith("..") || resolve2(realPath) !== resolve2(projectRoot, rel)) {
-        logger11.warn("Symlink traversal blocked \u2014 file resolves outside project root", {
+        logger12.warn("Symlink traversal blocked \u2014 file resolves outside project root", {
           filePath,
           realPath,
           projectRoot
@@ -4273,7 +4806,7 @@ var IngestionPipeline = class {
     }
     const ext = extname(filePath).slice(1).toLowerCase();
     if (!getParser(ext)) {
-      logger11.debug("Unsupported file type, skipping", { filePath, ext });
+      logger12.debug("Unsupported file type, skipping", { filePath, ext });
       return { fileId: "", entityIds: [], relationshipIds: [], status: "skipped" };
     }
     let stat;
@@ -4283,7 +4816,7 @@ var IngestionPipeline = class {
       return { fileId: "", entityIds: [], relationshipIds: [], status: "failed", error: "File not found" };
     }
     if (stat.size > this.options.maxFileSize) {
-      logger11.warn("File too large, skipping", { filePath, size: stat.size, max: this.options.maxFileSize });
+      logger12.warn("File too large, skipping", { filePath, size: stat.size, max: this.options.maxFileSize });
       return { fileId: "", entityIds: [], relationshipIds: [], status: "skipped", error: "File too large" };
     }
     let content;
@@ -4302,7 +4835,7 @@ var IngestionPipeline = class {
     const contentHash = createHash2("sha256").update(content).digest("hex");
     const existingFile = await this.store.getFile(filePath);
     if (existingFile && existingFile.contentHash === contentHash && existingFile.status === "ingested") {
-      logger11.debug("File unchanged, skipping", { filePath });
+      logger12.debug("File unchanged, skipping", { filePath });
       return {
         fileId: existingFile.id,
         entityIds: existingFile.entityIds,
@@ -4310,12 +4843,16 @@ var IngestionPipeline = class {
         status: "ingested"
       };
     }
+    if (!this.store.tryAcquireFileLock(filePath, this.options.projectId)) {
+      logger12.info("File is being processed by another process, skipping", { filePath });
+      return { fileId: "", entityIds: [], relationshipIds: [], status: "skipped", error: "Already being processed" };
+    }
     const relativePath = relative(this.options.projectRoot, filePath);
     try {
-      logger11.debug("Parsing file", { filePath, ext });
+      logger12.debug("Parsing file", { filePath, ext });
       const parseResult = await parser.parse(content, filePath);
       const chunks = chunkSections(parseResult.sections);
-      logger11.debug("Chunked file", { filePath, chunks: chunks.length });
+      logger12.debug("Chunked file", { filePath, chunks: chunks.length });
       const allEntities = [];
       let extractionErrors = 0;
       for (const chunk of chunks) {
@@ -4328,11 +4865,17 @@ var IngestionPipeline = class {
         throw new CortexError(LLM_EXTRACTION_FAILED, "high", "llm", `Entity extraction failed for all ${chunks.length} chunk(s) in ${filePath}`);
       }
       const deduped = this.deduplicateEntities(allEntities);
-      logger11.debug("Extracted entities", { filePath, raw: allEntities.length, deduped: deduped.length });
+      logger12.debug("Extracted entities", { filePath, raw: allEntities.length, deduped: deduped.length });
       const storedEntities = [];
-      for (const entity of deduped) {
-        const stored = await this.store.createEntity(entity);
-        storedEntities.push(stored);
+      this.store.transaction(() => {
+        if (existingFile) {
+          this.store.deleteEntitiesBySourceFile(filePath);
+        }
+        for (const entity of deduped) {
+          storedEntities.push(this.store.createEntitySync(entity));
+        }
+      });
+      for (const stored of storedEntities) {
         eventBus.emit({
           type: "entity.created",
           payload: { entity: stored },
@@ -4366,7 +4909,7 @@ var IngestionPipeline = class {
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         source: "ingest:pipeline"
       });
-      logger11.info("File ingested", {
+      logger12.info("File ingested", {
         filePath: relativePath,
         entities: entityIds.length,
         relationships: relationshipIds.length
@@ -4374,7 +4917,8 @@ var IngestionPipeline = class {
       return { fileId: fileRecord.id, entityIds, relationshipIds, status: "ingested" };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      logger11.error("Ingestion failed", { filePath, error: errorMsg });
+      logger12.error("Ingestion failed", { filePath, error: errorMsg });
+      this.store.releaseFileLock(filePath);
       await this.store.upsertFile({
         path: filePath,
         relativePath,
@@ -4393,6 +4937,7 @@ var IngestionPipeline = class {
   async extractEntities(chunk, filePath, fileType) {
     const contentHash = createHash2("sha256").update(chunk.content).digest("hex");
     const privacyOverride = this.options.projectPrivacyLevel !== "standard" ? { forceProvider: "local" } : {};
+    const safeContent = this.options.projectPrivacyLevel === "standard" ? this.scrubSecrets(chunk.content) : chunk.content;
     try {
       const result = await this.router.completeStructured({
         systemPrompt: entity_extraction_exports.systemPrompt,
@@ -4400,7 +4945,7 @@ var IngestionPipeline = class {
           filePath,
           projectName: this.options.projectName,
           fileType,
-          content: chunk.content
+          content: safeContent
         }),
         promptId: entity_extraction_exports.PROMPT_ID,
         promptVersion: entity_extraction_exports.PROMPT_VERSION,
@@ -4436,7 +4981,7 @@ var IngestionPipeline = class {
         hadError: false
       };
     } catch (err) {
-      logger11.warn("Entity extraction failed for chunk", {
+      logger12.warn("Entity extraction failed for chunk", {
         filePath,
         chunk: chunk.index,
         error: err instanceof Error ? err.message : String(err)
@@ -4498,7 +5043,7 @@ var IngestionPipeline = class {
       }
       return relationshipIds;
     } catch (err) {
-      logger11.warn("Relationship inference failed", {
+      logger12.warn("Relationship inference failed", {
         error: err instanceof Error ? err.message : String(err)
       });
       return [];
@@ -4507,7 +5052,7 @@ var IngestionPipeline = class {
   deduplicateEntities(entities) {
     const seen = /* @__PURE__ */ new Map();
     for (const entity of entities) {
-      const key = `${entity.type}:${entity.name.toLowerCase()}`;
+      const key = `${entity.type}:${(entity.name ?? "").toLowerCase()}`;
       const existing = seen.get(key);
       if (!existing || entity.confidence > existing.confidence) {
         seen.set(key, entity);
@@ -4625,11 +5170,268 @@ async function handleRemoveProject(input) {
   };
 }
 
+// packages/mcp/dist/tools/ask.js
+async function handleCortexAsk(input, queryEngine, router, store) {
+  const [context, searchResults, allContradictions, graphStats, projects] = await Promise.all([
+    queryEngine.assembleContext(input.question, void 0, input.projectId),
+    store.searchEntities(input.question, 20),
+    store.findContradictions({ status: "active", limit: 50 }),
+    store.getStats(),
+    store.listProjects()
+  ]);
+  const entityMap = /* @__PURE__ */ new Map();
+  for (const e of context.entities) {
+    entityMap.set(e.id, e);
+  }
+  for (const e of searchResults) {
+    if (!entityMap.has(e.id)) {
+      entityMap.set(e.id, e);
+    }
+  }
+  const mergedEntities = Array.from(entityMap.values());
+  const mergedEntityIds = mergedEntities.map((e) => e.id);
+  const relationships = await store.getRelationshipsForEntities(mergedEntityIds);
+  const entityIdSet = new Set(mergedEntityIds);
+  const relevantContradictions = allContradictions.filter((c) => entityIdSet.has(c.entityIds[0]) || entityIdSet.has(c.entityIds[1]));
+  const contradictionEntries = await Promise.all(relevantContradictions.map(async (c) => {
+    const [entityA, entityB] = await Promise.all([
+      store.getEntity(c.entityIds[0]).catch(() => null),
+      store.getEntity(c.entityIds[1]).catch(() => null)
+    ]);
+    return {
+      id: c.id,
+      severity: c.severity,
+      description: c.description,
+      entityNames: [
+        entityA?.name ?? c.entityIds[0],
+        entityB?.name ?? c.entityIds[1]
+      ]
+    };
+  }));
+  const entityResults = mergedEntities.map((e) => {
+    const entityRels = relationships.filter((r) => r.sourceEntityId === e.id || r.targetEntityId === e.id).map((r) => {
+      const isOutgoing = r.sourceEntityId === e.id;
+      const otherId = isOutgoing ? r.targetEntityId : r.sourceEntityId;
+      const other = mergedEntities.find((ent) => ent.id === otherId);
+      return {
+        type: r.type,
+        direction: isOutgoing ? "outgoing" : "incoming",
+        otherEntityName: other?.name ?? otherId
+      };
+    });
+    return {
+      id: e.id,
+      type: e.type,
+      name: e.name,
+      summary: e.summary,
+      sourceFile: e.sourceFile,
+      confidence: e.confidence,
+      tags: e.tags,
+      relationships: entityRels
+    };
+  });
+  const sourceFiles = [...new Set(mergedEntities.map((e) => e.sourceFile))];
+  const graphSummary = [
+    `${graphStats.entityCount} entities, ${graphStats.relationshipCount} relationships, ${graphStats.fileCount} files indexed`,
+    projects.length > 0 ? `Projects: ${projects.map((p) => `${p.name} (${p.rootPath})`).join(", ")}` : "No projects configured."
+  ].filter(Boolean).join("\n");
+  if (mergedEntities.length === 0 && graphStats.entityCount === 0) {
+    return {
+      answer: "The knowledge graph is empty. Ingest some files first with `ingest_file` or start `cortex watch`.",
+      entities: [],
+      contradictions: [],
+      sourceFiles: [],
+      stats: { entitiesMatched: 0, relationshipsFound: 0, provider: "none", model: "none" }
+    };
+  }
+  const contextEntities = mergedEntities.map((e) => ({
+    id: e.id,
+    type: e.type,
+    name: e.name,
+    content: e.content,
+    sourceFile: e.sourceFile,
+    createdAt: e.createdAt,
+    relationships: relationships.filter((r) => r.sourceEntityId === e.id).map((r) => ({ type: r.type, targetEntityId: r.targetEntityId }))
+  }));
+  const result = await router.complete({
+    systemPrompt: unified_query_exports.systemPrompt,
+    userPrompt: unified_query_exports.buildUserPrompt({
+      contextEntities,
+      userQuery: input.question,
+      graphSummary,
+      contradictions: contradictionEntries
+    }),
+    promptId: unified_query_exports.PROMPT_ID,
+    promptVersion: unified_query_exports.PROMPT_VERSION,
+    task: LLMTask.CONVERSATIONAL_QUERY,
+    modelPreference: unified_query_exports.config.model,
+    temperature: unified_query_exports.config.temperature,
+    maxTokens: unified_query_exports.config.maxTokens
+  });
+  return {
+    answer: result.content,
+    entities: entityResults,
+    contradictions: contradictionEntries,
+    sourceFiles,
+    stats: {
+      entitiesMatched: mergedEntities.length,
+      relationshipsFound: relationships.length,
+      provider: result.provider,
+      model: result.model
+    }
+  };
+}
+
+// packages/mcp/dist/tools/brief.js
+async function handleSessionBrief(store, projectId) {
+  const [graphStats, projects, contradictions, reportData, recentFiles] = await Promise.all([
+    store.getStats(),
+    store.listProjects(),
+    store.findContradictions({ status: "active", limit: 10 }),
+    store.getReportData(),
+    store.getRecentFiles(7, 20)
+  ]);
+  const [decisions, patterns, risks, actionItems] = await Promise.all([
+    store.findEntities({ type: "Decision", limit: 10, ...projectId ? { projectId } : {} }),
+    store.findEntities({ type: "Pattern", limit: 5, ...projectId ? { projectId } : {} }),
+    store.findEntities({ type: "Risk", limit: 5, ...projectId ? { projectId } : {} }),
+    store.findEntities({ type: "ActionItem", limit: 5, ...projectId ? { projectId } : {} })
+  ]);
+  const enrichedContradictions = await Promise.all(contradictions.map(async (c) => {
+    const [entityA, entityB] = await Promise.all([
+      store.getEntity(c.entityIds[0]).catch(() => null),
+      store.getEntity(c.entityIds[1]).catch(() => null)
+    ]);
+    return {
+      severity: c.severity,
+      description: c.description,
+      entityA: entityA?.name ?? "unknown",
+      entityB: entityB?.name ?? "unknown"
+    };
+  }));
+  const lines = ["# Cortex Session Brief", ""];
+  lines.push("## Graph Overview");
+  lines.push(`- **${graphStats.entityCount}** entities across **${projects.length}** project(s), **${graphStats.relationshipCount}** relationships`);
+  lines.push(`- **${graphStats.fileCount}** files indexed`);
+  if (projects.length > 0) {
+    const lastIngested = projects.map((p) => p.lastIngestedAt).filter(Boolean).sort().pop();
+    if (lastIngested) {
+      lines.push(`- Last ingested: ${lastIngested}`);
+    }
+  }
+  lines.push("");
+  if (projects.length > 0) {
+    lines.push("## Projects");
+    for (const p of projects) {
+      lines.push(`- **${p.name}** (${p.rootPath}) \u2014 ${p.entityCount} entities, ${p.fileCount} files`);
+    }
+    lines.push("");
+  }
+  if (reportData.entityBreakdown.length > 0) {
+    lines.push("## Entity Breakdown");
+    for (const eb of reportData.entityBreakdown) {
+      lines.push(`- ${eb.type}: ${eb.count} (avg confidence: ${(eb.avgConfidence * 100).toFixed(0)}%)`);
+    }
+    lines.push("");
+  }
+  if (decisions.length > 0) {
+    lines.push("## Key Decisions");
+    for (const d of decisions) {
+      const file = d.sourceFile.split("/").pop() ?? d.sourceFile;
+      lines.push(`- **${d.name}** \u2014 ${d.summary ?? d.content.slice(0, 100)} _(${file})_`);
+    }
+    lines.push("");
+  }
+  if (patterns.length > 0) {
+    lines.push("## Active Patterns");
+    for (const p of patterns) {
+      lines.push(`- **${p.name}** \u2014 ${p.summary ?? p.content.slice(0, 100)}`);
+    }
+    lines.push("");
+  }
+  if (enrichedContradictions.length > 0) {
+    lines.push(`## Open Contradictions (${enrichedContradictions.length} active)`);
+    for (const c of enrichedContradictions) {
+      lines.push(`- [${c.severity.toUpperCase()}] **${c.entityA}** vs **${c.entityB}**: ${c.description}`);
+    }
+    lines.push("");
+  }
+  if (risks.length > 0) {
+    lines.push("## Active Risks");
+    for (const r of risks) {
+      lines.push(`- **${r.name}** \u2014 ${r.summary ?? r.content.slice(0, 100)}`);
+    }
+    lines.push("");
+  }
+  if (actionItems.length > 0) {
+    lines.push("## Open Action Items");
+    for (const a of actionItems) {
+      lines.push(`- **${a.name}** \u2014 ${a.summary ?? a.content.slice(0, 100)}`);
+    }
+    lines.push("");
+  }
+  if (recentFiles.length > 0) {
+    lines.push("## Recent Changes (last 7 days)");
+    for (const f of recentFiles) {
+      const rel = f.relativePath || f.path.split("/").slice(-2).join("/");
+      lines.push(`- ${rel} (ingested: ${f.lastIngestedAt ?? "unknown"})`);
+    }
+    lines.push("");
+  }
+  if (graphStats.entityCount === 0) {
+    lines.length = 0;
+    lines.push("# Cortex Session Brief", "");
+    lines.push("The knowledge graph is empty. Get started by:");
+    lines.push("1. Register a project: `add_project` with name and path");
+    lines.push("2. Ingest files: `ingest_file` or run `cortex watch`");
+    lines.push("3. Ask questions: `cortex_ask` with natural language");
+    lines.push("");
+  }
+  return {
+    markdown: lines.join("\n"),
+    stats: {
+      entityCount: graphStats.entityCount,
+      relationshipCount: graphStats.relationshipCount,
+      fileCount: graphStats.fileCount,
+      projectCount: projects.length,
+      contradictionCount: contradictions.length
+    }
+  };
+}
+
+// packages/mcp/dist/resources.js
+function registerResources(mcp, bundle) {
+  mcp.registerResource("session-brief", "cortex://brief", {
+    description: "Read this at the start of every session. Contains key entities, recent changes, open contradictions, and a graph summary from the Cortex knowledge graph. This gives you full project context without needing to query individual tools.",
+    mimeType: "text/markdown"
+  }, async () => {
+    const result = await handleSessionBrief(bundle.store);
+    return {
+      contents: [{
+        uri: "cortex://brief",
+        mimeType: "text/markdown",
+        text: result.markdown
+      }]
+    };
+  });
+}
+
 // packages/mcp/dist/server.js
 function createCortexMcpServer(bundle, router) {
   const server = new McpServer({
     name: "cortex",
     version: "0.1.0"
+  });
+  server.registerTool("cortex_ask", {
+    title: "Ask Cortex",
+    description: 'Ask the Cortex knowledge graph any question in natural language. Returns an LLM-generated answer plus matched entities (with types, relationships, source files), relevant contradictions, and deduplicated file paths \u2014 all in one response. This is the primary way to query Cortex. Use it for questions like "What functions depend on the User model?", "What tech decisions have been made?", or "What contradictions exist in the auth flow?"',
+    inputSchema: {
+      question: z9.string().describe("Natural language question about your codebase or project"),
+      projectId: z9.string().optional().describe("Scope to a specific project. Get IDs from list_projects.")
+    }
+  }, async ({ question, projectId }) => {
+    const result = await handleCortexAsk({ question, projectId }, bundle.queryEngine, router, bundle.store);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   });
   server.registerTool("get_status", {
     title: "Get Cortex Status",
@@ -4647,7 +5449,7 @@ function createCortexMcpServer(bundle, router) {
   });
   server.registerTool("find_entity", {
     title: "Find Entity",
-    description: "Look up a specific entity by name or UUID in the Cortex knowledge graph. Returns entity details and optionally its relationships to other entities. Use this for precise lookups: decisions, patterns, components, dependencies.",
+    description: "[Deprecated \u2014 use cortex_ask instead] Look up a specific entity by name or UUID. Returns entity details and optionally its relationships to other entities.",
     inputSchema: {
       name: z9.string().describe("Entity name (fuzzy matched) or exact UUID"),
       expand: z9.boolean().optional().describe("Include all relationships with neighbor entity names (default: false)"),
@@ -4659,7 +5461,7 @@ function createCortexMcpServer(bundle, router) {
   });
   server.registerTool("query_cortex", {
     title: "Query Cortex Knowledge Graph",
-    description: "Answer a natural language question using the Cortex knowledge graph. Returns an LLM-generated answer with cited entities. Use this to understand decisions, architectural choices, patterns, and dependencies across watched projects.",
+    description: "[Deprecated \u2014 use cortex_ask instead] Answer a natural language question using the knowledge graph. Returns an LLM-generated answer with cited entities.",
     inputSchema: {
       question: z9.string().describe("The natural language question to answer"),
       projectId: z9.string().optional().describe("Scope context to a specific project. Get IDs from list_projects.")
@@ -4692,7 +5494,7 @@ function createCortexMcpServer(bundle, router) {
   });
   server.registerTool("search_entities", {
     title: "Search Entities",
-    description: "Search across all entities in the knowledge graph using full-text search. Returns matching entities ranked by relevance. Use this for broad searches when you don't know the exact entity name.",
+    description: "[Deprecated \u2014 use cortex_ask instead] Full-text search across entities. Returns matching entities ranked by relevance.",
     inputSchema: {
       query: z9.string().describe("Search text (keywords, phrases)"),
       limit: z9.number().optional().describe("Max results to return (default: 20, max: 100)"),
@@ -4735,6 +5537,17 @@ function createCortexMcpServer(bundle, router) {
     const result = await handleRemoveProject({ name });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   });
+  server.registerTool("session_brief", {
+    title: "Session Brief",
+    description: "Get a comprehensive session briefing from the knowledge graph. Returns key decisions, active patterns, open contradictions, risks, action items, and recent file changes. Use this to quickly understand project state without reading individual entities.",
+    inputSchema: {
+      projectId: z9.string().optional().describe("Scope to a specific project. If omitted, shows cross-project summary.")
+    }
+  }, async ({ projectId }) => {
+    const result = await handleSessionBrief(bundle.store, projectId);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  });
+  registerResources(server, bundle);
   return server;
 }
 
@@ -4744,9 +5557,9 @@ if (!process.env["CORTEX_LOG_LEVEL"]) {
 }
 async function main() {
   const configDir = process.env["CORTEX_CONFIG_DIR"];
-  const config8 = loadConfig({ configDir });
+  const config9 = loadConfig({ configDir });
   const bundle = await createStoreBundle(configDir);
-  const router = new Router({ config: config8 });
+  const router = new Router({ config: config9 });
   const server = createCortexMcpServer(bundle, router);
   const transport = new StdioServerTransport();
   process.on("SIGINT", () => {

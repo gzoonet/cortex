@@ -60,7 +60,7 @@ cd cortex
 npm install && npm run build && npm link
 ```
 
-Verify: `cortex --version` (current release: **0.7.0**)
+Verify: `cortex --version` (current release: **0.7.1**)
 
 ### 2. Setup
 
@@ -125,7 +125,7 @@ Remote access:
 cortex serve --host 0.0.0.0
 ```
 
-Auth is enforced automatically on non-localhost hosts. The dashboard injects a bearer token into the HTML so API and WebSocket calls work behind a reverse proxy.
+Auth is enforced automatically on non-localhost hosts. A bearer token is auto-generated and saved to `~/.cortex/.env` (read it with `grep CORTEX_SERVER_AUTH_TOKEN ~/.cortex/.env`). Open the dashboard once with `http://<host>:3710/?token=<token>` — the token is embedded only for requests that already prove possession of it and is then kept for the browser tab (so anonymous visitors never receive it). API/WebSocket calls behind a reverse proxy use `Authorization: Bearer <token>`.
 
 ### Excluding Files & Directories
 

@@ -2,6 +2,20 @@
 
 All notable changes to GZOO Cortex will be documented in this file.
 
+## [0.7.1] - 2026-06-23
+
+### Security
+
+- **`cortex config`** — `get`/`list`/`set` no longer print the cloud API key (when stored inline) or the server auth token; `env:VAR_NAME` references remain visible since they name an env var, not a credential (CWE-312/319/532).
+- **`cortex doctor`** — no longer echoes the configured `apiKeySource`; the "Cloud API key" check reports presence only (fixes CodeQL `js/clear-text-logging`, CWE-312).
+- **`cortex serve`** — no longer prints the generated auth token to stdout; it is saved to `~/.cortex/.env` and the command points there instead.
+- **Dashboard auth** — the SPA route only embeds the bearer token for a request that already proves possession of it (`Authorization: Bearer` or `?token=`). Anonymous requests no longer receive the token, closing an auth bypass where any unauthenticated client could scrape it from the dashboard HTML (CWE-312/522). For remote dashboards, open once with `?token=<token>`; the token is then persisted per-tab via `sessionStorage`.
+- **CORS** — no longer reflects arbitrary `localhost:*` origins; only the configured `server.cors` origins are allowed (CWE-346/942).
+
+### Fixed
+
+- **Dependencies** — upgrade `vite` 8.0.7 → 8.0.16 (web dev tooling) and `form-data` → 4.0.6, clearing Dependabot advisories GHSA-fx2h-pf6j-xcff, GHSA-v6wh-96g9-6wx3, and GHSA-hmw2-7cc7-3qxx.
+
 ## [0.7.0] - 2026-06-21
 
 ### Added

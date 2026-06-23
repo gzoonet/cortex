@@ -8870,9 +8870,6 @@ async function startServer(options) {
         return callback(null, true);
       if (corsOrigin.includes(origin))
         return callback(null, true);
-      if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
-        return callback(null, true);
-      }
       logger36.warn("CORS rejected", { origin, allowed: corsOrigin });
       callback(new Error("CORS not allowed"));
     }
@@ -8943,11 +8940,11 @@ ${tokenScript}
 ${html}`;
     };
     const spaLimiter = rate_limit_default({ windowMs: 6e4, max: 60 });
-    app.get("*", spaLimiter, (_req, res) => {
+    app.get("*", spaLimiter, (req, res) => {
       const indexPath = resolve21(webDist, "index.html");
-      if (config9.server.auth.enabled && config9.server.auth.token) {
-        const html = injectAuthToken(readFileSync11(indexPath, "utf-8"));
-        res.type("html").send(html);
+      const authActive = config9.server.auth.enabled && !!config9.server.auth.token;
+      if (authActive && validateWsToken(config9, host, req.url, req.headers.authorization)) {
+        res.type("html").send(injectAuthToken(readFileSync11(indexPath, "utf-8")));
       } else {
         res.sendFile(indexPath);
       }
@@ -9404,12 +9401,14 @@ async function runDoctor(globals) {
       exitCode = 1;
     }
     if (config9.llm.mode !== "local-only") {
-      const hasKey = resolveApiKey(config9.llm.cloud.apiKeySource);
+      const apiKeySource = config9.llm.cloud.apiKeySource;
+      const hasKey = resolveApiKey(apiKeySource);
+      const usesEnvRef = apiKeySource.startsWith("env:");
       checks.push({
         name: "Cloud API key",
         ok: hasKey,
-        message: hasKey ? config9.llm.cloud.apiKeySource : `Missing: ${config9.llm.cloud.apiKeySource}`,
-        hint: hasKey ? void 0 : "Set the key in ~/.cortex/.env"
+        message: hasKey ? "Configured" : "Not configured",
+        hint: hasKey ? usesEnvRef ? void 0 : "Reference the key via env:VAR_NAME instead of storing it inline in your config" : "Set the key referenced by llm.cloud.apiKeySource (see ~/.cortex/.env)"
       });
       if (!hasKey)
         exitCode = 1;
@@ -10411,6 +10410,34 @@ function registerConfigCommand(program2) {
   });
 }
 var DANGEROUS_KEYS = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
+var REDACTED_APIKEY = "<redacted: inline key \u2014 reference it via env:VAR_NAME instead>";
+var REDACTED_TOKEN = "<redacted: server auth token>";
+function isInlineApiKey(value) {
+  return typeof value === "string" && value.length > 0 && !value.startsWith("env:");
+}
+function redactSecretField(key, value) {
+  if (key === "apiKeySource" && isInlineApiKey(value))
+    return REDACTED_APIKEY;
+  if (key === "token" && typeof value === "string" && value.length > 0)
+    return REDACTED_TOKEN;
+  return void 0;
+}
+function redactSecrets(value) {
+  if (Array.isArray(value))
+    return value.map(redactSecrets);
+  if (value !== null && typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = redactSecretField(k, v) ?? redactSecrets(v);
+    }
+    return out;
+  }
+  return value;
+}
+function redactValueForKey(key, value) {
+  const leaf = key.slice(key.lastIndexOf(".") + 1);
+  return redactSecretField(leaf, value) ?? redactSecrets(value);
+}
 function getNestedValue(obj, path) {
   const parts = path.split(".");
   let current = obj;
@@ -10474,7 +10501,7 @@ function readConfigFile2(path) {
 async function runConfigGet(key, globals) {
   try {
     const config9 = loadConfig({ configDir: globals.config ? resolve10(globals.config) : void 0 });
-    const value = getNestedValue(config9, key);
+    const value = getNestedValue(redactSecrets(config9), key);
     if (value === void 0) {
       if (globals.json) {
         console.log(JSON.stringify({ error: `Key not found: ${key}` }));
@@ -10512,10 +10539,11 @@ async function runConfigSet(key, value, globals) {
     }
     mkdirSync5(dirname2(configPath), { recursive: true });
     writeFileSync3(configPath, JSON.stringify(raw, null, 2) + "\n", "utf-8");
+    const displayValue = redactValueForKey(key, parsed);
     if (globals.json) {
-      console.log(JSON.stringify({ key, value: parsed, saved: true }));
+      console.log(JSON.stringify({ key, value: displayValue, saved: true }));
     } else {
-      console.log(chalk8.green(`\u2713 Set ${key} = ${JSON.stringify(parsed)}`));
+      console.log(chalk8.green(`\u2713 Set ${key} = ${JSON.stringify(displayValue)}`));
     }
   } catch (err) {
     logger19.error("Config set failed", { error: err instanceof Error ? err.message : String(err) });
@@ -10526,14 +10554,15 @@ async function runConfigList(globals) {
   try {
     const config9 = loadConfig({ configDir: globals.config ? resolve10(globals.config) : void 0 });
     const defaults = getDefaultConfig();
+    const safeConfig = redactSecrets(config9);
     if (globals.json) {
-      console.log(JSON.stringify(config9));
+      console.log(JSON.stringify(safeConfig));
       return;
     }
     console.log("");
     console.log(chalk8.bold.cyan("CORTEX CONFIGURATION"));
     console.log(chalk8.dim("\u2500".repeat(50)));
-    const configFlat = flattenObject(config9);
+    const configFlat = flattenObject(safeConfig);
     const defaultFlat = flattenObject(defaults);
     let hasNonDefault = false;
     for (const [key, value] of Object.entries(configFlat)) {
@@ -12091,7 +12120,8 @@ ${line}
   config9.server.auth.token = token;
   console.log(`
   Auth token generated and saved to ${envPath}`);
-  console.log(`  Token: ${token}
+  console.log(`  It is required for API access \u2014 read it with:`);
+  console.log(`    grep CORTEX_SERVER_AUTH_TOKEN ${envPath}
 `);
 }
 async function runServe(opts, globals) {
@@ -12213,7 +12243,7 @@ function wireTokenPersistence(router, store) {
 }
 function getVersion() {
   if (true)
-    return "0.7.0";
+    return "0.7.1";
   let dir = typeof __dirname !== "undefined" ? __dirname : dirname6(fileURLToPath2(import.meta.url));
   for (let i = 0; i < 6; i++) {
     try {
