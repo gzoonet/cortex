@@ -151,7 +151,7 @@ var init_event_bus = __esm({
 
 // packages/core/dist/config/schema.js
 import { z } from "zod";
-var ingestConfigSchema, graphConfigSchema, llmBudgetSchema, llmCacheSchema, llmLocalSchema, llmCloudSchema, llmConfigSchema, privacyConfigSchema, serverAuthSchema, serverConfigSchema, loggingConfigSchema, cortexConfigSchema;
+var ingestConfigSchema, graphConfigSchema, llmBudgetSchema, llmCacheSchema, llmLocalSchema, llmCloudSchema, llmEmbeddingsSchema, llmConfigSchema, privacyConfigSchema, serverAuthSchema, serverConfigSchema, loggingConfigSchema, cortexConfigSchema;
 var init_schema = __esm({
   "packages/core/dist/config/schema.js"() {
     "use strict";
@@ -227,6 +227,14 @@ var init_schema = __esm({
       maxRetries: z.number().nonnegative().default(3),
       promptCaching: z.boolean().default(true)
     });
+    llmEmbeddingsSchema = z.object({
+      enabled: z.boolean().default(false),
+      provider: z.string().default("openai-compatible"),
+      baseUrl: z.string().url().default("https://api.openai.com/v1"),
+      model: z.string().default("text-embedding-3-small"),
+      apiKeySource: z.string().default("env:OPENAI_API_KEY"),
+      dimensions: z.number().positive().default(1536)
+    });
     llmConfigSchema = z.object({
       mode: z.enum(["cloud-first", "hybrid", "local-first", "local-only"]).default("cloud-first"),
       taskRouting: z.record(z.string(), z.enum(["auto", "local", "cloud"])).default({
@@ -247,7 +255,8 @@ var init_schema = __esm({
       cache: llmCacheSchema.default({}),
       budget: llmBudgetSchema.default({}),
       local: llmLocalSchema.default({}),
-      cloud: llmCloudSchema.default({})
+      cloud: llmCloudSchema.default({}),
+      embeddings: llmEmbeddingsSchema.optional()
     });
     privacyConfigSchema = z.object({
       defaultLevel: z.enum(["standard", "sensitive", "restricted"]).default("standard"),
@@ -2152,6 +2161,7 @@ var init_openai_compatible = __esm({
       client;
       primaryModel;
       fastModel;
+      embeddingModel;
       isGemini;
       capabilities = {
         supportedTasks: [
@@ -2181,6 +2191,7 @@ var init_openai_compatible = __esm({
         });
         this.primaryModel = options.primaryModel ?? "gpt-4o";
         this.fastModel = options.fastModel ?? "gpt-4o-mini";
+        this.embeddingModel = options.embeddingModel ?? "text-embedding-3-small";
         try {
           const parsedUrl = new URL(options.baseUrl);
           this.isGemini = parsedUrl.hostname === "generativelanguage.googleapis.com";
@@ -2271,8 +2282,18 @@ var init_openai_compatible = __esm({
           throw this.mapError(err);
         }
       }
-      async embed(_texts) {
-        throw new CortexError(LLM_PROVIDER_UNAVAILABLE, "medium", "llm", "OpenAI-compatible provider does not handle embeddings. Use local embedding model.");
+      async embed(texts) {
+        if (texts.length === 0)
+          return [];
+        try {
+          const response = await this.client.embeddings.create({
+            model: this.embeddingModel,
+            input: texts
+          });
+          return response.data.slice().sort((a, b) => a.index - b.index).map((d) => new Float32Array(d.embedding));
+        } catch (err) {
+          throw this.mapError(err);
+        }
       }
       async isAvailable() {
         try {
@@ -2748,6 +2769,7 @@ var init_router = __esm({
     Router = class _Router {
       cloudProvider = null;
       localProvider = null;
+      embeddingProvider = null;
       mode;
       taskRouting;
       tracker;
@@ -2806,6 +2828,28 @@ var init_router = __esm({
             timeoutMs: config9.llm.local.timeoutMs,
             keepAlive: config9.llm.local.keepAlive
           });
+        }
+        const embeddings = config9.llm.embeddings;
+        if (embeddings?.enabled) {
+          const embKey = resolveApiKeySource(embeddings.apiKeySource);
+          if (embKey) {
+            try {
+              this.embeddingProvider = new OpenAICompatibleProvider({
+                baseUrl: embeddings.baseUrl,
+                apiKey: embKey,
+                embeddingModel: embeddings.model,
+                timeoutMs: config9.llm.cloud.timeoutMs,
+                maxRetries: config9.llm.cloud.maxRetries
+              });
+              logger7.info("Embedding provider initialized", { baseUrl: embeddings.baseUrl, model: embeddings.model });
+            } catch (err) {
+              logger7.warn("Embedding provider init failed", {
+                error: err instanceof Error ? err.message : String(err)
+              });
+            }
+          } else {
+            logger7.warn("llm.embeddings.enabled but API key not found", { source: embeddings.apiKeySource });
+          }
         }
         this.tracker = new TokenTracker(config9.llm.budget.monthlyLimitUsd, config9.llm.budget.warningThresholds);
         this.cache = new ResponseCache({
@@ -3061,6 +3105,25 @@ var init_router = __esm({
       }
       getLocalProvider() {
         return this.localProvider;
+      }
+      /**
+       * Generate embeddings via the dedicated embeddings provider (e.g. OpenAI),
+       * falling back to the local Ollama embedder if no cloud embeddings provider is configured.
+       */
+      async embed(texts) {
+        const provider = this.embeddingProvider ?? this.localProvider;
+        if (!provider) {
+          throw new CortexError(LLM_PROVIDER_UNAVAILABLE, "high", "llm", "No embedding provider available.", void 0, "Enable llm.embeddings with an API key, or run Ollama locally.", false);
+        }
+        return provider.embed(texts);
+      }
+      /** Whether semantic embeddings can be generated (cloud embeddings provider or local Ollama). */
+      hasEmbeddings() {
+        return !!this.embeddingProvider || !!this.localProvider;
+      }
+      /** Configured embedding vector dimension — used when creating the vector store table. */
+      embeddingDimensions() {
+        return this.config.llm.embeddings?.dimensions ?? 384;
       }
       getCloudProvider() {
         return this.cloudProvider;
@@ -3545,529 +3608,6 @@ var init_dist2 = __esm({
   }
 });
 
-// packages/ingest/dist/secret-patterns.js
-function compileSecretPattern(pattern) {
-  try {
-    let source = pattern;
-    let flags = "gi";
-    if (source.startsWith("(?i)")) {
-      source = source.slice(4);
-      flags = "gi";
-    }
-    return new RegExp(source, flags);
-  } catch {
-    logger8.warn("Invalid secret pattern, skipping", { pattern });
-    return null;
-  }
-}
-function compileSecretPatterns(patterns) {
-  return patterns.map((pattern) => compileSecretPattern(pattern)).filter((re) => re !== null);
-}
-var logger8;
-var init_secret_patterns = __esm({
-  "packages/ingest/dist/secret-patterns.js"() {
-    "use strict";
-    init_dist();
-    logger8 = createLogger("ingest:secret-patterns");
-  }
-});
-
-// packages/ingest/dist/post-ingest.js
-async function runMergeDetection(entities, sourceFile, store, router, mergeConfidenceThreshold) {
-  if (!router.getLocalProvider()) {
-    return;
-  }
-  for (const entity of entities) {
-    let candidates;
-    try {
-      candidates = await store.searchEntities(entity.name, 5);
-    } catch {
-      continue;
-    }
-    const others = candidates.filter((c) => c.id !== entity.id && c.sourceFile !== sourceFile && c.status !== "superseded" && c.type === entity.type);
-    for (const candidate of others) {
-      try {
-        const result = await router.completeStructured({
-          systemPrompt: merge_detection_exports.systemPrompt,
-          userPrompt: merge_detection_exports.buildUserPrompt({
-            a: { type: entity.type, name: entity.name, summary: entity.summary, sourceFile: entity.sourceFile },
-            b: { type: candidate.type, name: candidate.name, summary: candidate.summary, sourceFile: candidate.sourceFile }
-          }),
-          promptId: merge_detection_exports.PROMPT_ID,
-          promptVersion: merge_detection_exports.PROMPT_VERSION,
-          task: LLMTask.ENTITY_EXTRACTION,
-          temperature: merge_detection_exports.config.temperature,
-          maxTokens: merge_detection_exports.config.maxTokens,
-          forceProvider: "local"
-        }, merge_detection_exports.outputSchema);
-        if (result.data.shouldMerge && result.data.confidence >= mergeConfidenceThreshold) {
-          await store.updateEntity(candidate.id, { status: "superseded" });
-          eventBus.emit({
-            type: "entity.merged",
-            payload: { survivorId: entity.id, mergedId: candidate.id },
-            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-            source: "ingest:post-ingest"
-          });
-          logger9.info("Entity merged", {
-            survivor: entity.name,
-            merged: candidate.name,
-            confidence: result.data.confidence,
-            reason: result.data.reason
-          });
-        }
-      } catch (err) {
-        logger9.debug("Merge detection failed for pair", {
-          entity: entity.name,
-          candidate: candidate.name,
-          error: err instanceof Error ? err.message : String(err)
-        });
-      }
-    }
-  }
-}
-async function runContradictionDetection(entities, sourceFile, projectId, privacyLevel, store, router, checkedEntityPairs = /* @__PURE__ */ new Set()) {
-  if (privacyLevel === "restricted") {
-    return;
-  }
-  const privacyForce = privacyLevel === "sensitive" ? { forceProvider: "local" } : {};
-  const contradictedFilePairs = /* @__PURE__ */ new Set();
-  for (const entity of entities) {
-    let candidates;
-    try {
-      candidates = await store.searchEntities(entity.name, 5);
-    } catch {
-      continue;
-    }
-    const others = candidates.filter((c) => c.id !== entity.id && c.sourceFile !== sourceFile && c.status !== "superseded" && c.type === entity.type);
-    for (const candidate of others) {
-      const filePairKey = [entity.sourceFile, candidate.sourceFile].sort().join("\0");
-      if (contradictedFilePairs.has(filePairKey))
-        continue;
-      const entityPairKey = [entity.id, candidate.id].sort().join("\0");
-      if (checkedEntityPairs.has(entityPairKey))
-        continue;
-      checkedEntityPairs.add(entityPairKey);
-      try {
-        const result = await router.completeStructured({
-          systemPrompt: contradiction_detection_exports.systemPrompt,
-          userPrompt: contradiction_detection_exports.buildUserPrompt({
-            a: {
-              type: entity.type,
-              name: entity.name,
-              content: entity.summary ?? entity.content,
-              createdAt: entity.createdAt,
-              sourceFile: entity.sourceFile
-            },
-            b: {
-              type: candidate.type,
-              name: candidate.name,
-              content: candidate.summary ?? candidate.content,
-              createdAt: candidate.createdAt,
-              sourceFile: candidate.sourceFile
-            }
-          }),
-          promptId: contradiction_detection_exports.PROMPT_ID,
-          promptVersion: contradiction_detection_exports.PROMPT_VERSION,
-          task: LLMTask.CONTRADICTION_DETECTION,
-          temperature: contradiction_detection_exports.config.temperature,
-          maxTokens: contradiction_detection_exports.config.maxTokens,
-          ...privacyForce
-        }, contradiction_detection_exports.outputSchema);
-        if (result.data.isContradiction) {
-          contradictedFilePairs.add(filePairKey);
-          const contradiction = await store.createContradiction({
-            entityIds: [entity.id, candidate.id],
-            description: result.data.description,
-            severity: result.data.severity,
-            suggestedResolution: result.data.suggestedResolution,
-            status: "active",
-            detectedAt: (/* @__PURE__ */ new Date()).toISOString()
-          });
-          eventBus.emit({
-            type: "contradiction.detected",
-            payload: { contradiction },
-            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-            source: "ingest:post-ingest"
-          });
-          logger9.info("Contradiction detected", {
-            entityA: entity.name,
-            entityB: candidate.name,
-            severity: result.data.severity
-          });
-        }
-      } catch (err) {
-        logger9.debug("Contradiction detection failed for pair", {
-          entity: entity.name,
-          candidate: candidate.name,
-          error: err instanceof Error ? err.message : String(err)
-        });
-      }
-    }
-  }
-}
-var logger9;
-var init_post_ingest = __esm({
-  "packages/ingest/dist/post-ingest.js"() {
-    "use strict";
-    init_dist();
-    init_dist2();
-    logger9 = createLogger("ingest:post-ingest");
-  }
-});
-
-// packages/ingest/dist/pipeline.js
-import { readFileSync as readFileSync4, statSync, realpathSync } from "node:fs";
-import { relative, extname as extname2, resolve as resolve3 } from "node:path";
-import { createHash as createHash2 } from "node:crypto";
-var logger10, IngestionPipeline;
-var init_pipeline = __esm({
-  "packages/ingest/dist/pipeline.js"() {
-    "use strict";
-    init_dist();
-    init_dist2();
-    init_parsers();
-    init_chunker();
-    init_secret_patterns();
-    init_post_ingest();
-    logger10 = createLogger("ingest:pipeline");
-    IngestionPipeline = class {
-      router;
-      store;
-      options;
-      // Shared across all ingestFile calls — prevents the same entity pair from being
-      // evaluated twice when multiple files ingest in the same batch.
-      checkedContradictionPairs = /* @__PURE__ */ new Set();
-      // Pre-compiled secret patterns for scrubbing before cloud LLM calls
-      compiledSecretPatterns;
-      constructor(router, store, options) {
-        this.router = router;
-        this.store = store;
-        this.options = options;
-        this.compiledSecretPatterns = compileSecretPatterns(options.secretPatterns ?? []);
-      }
-      /**
-       * Scrub secrets from content before sending to cloud LLMs.
-       * Only applied for standard privacy (sensitive/restricted use local provider).
-       */
-      scrubSecrets(content) {
-        if (this.compiledSecretPatterns.length === 0)
-          return content;
-        let scrubbed = content;
-        for (const re of this.compiledSecretPatterns) {
-          re.lastIndex = 0;
-          scrubbed = scrubbed.replace(re, "[SECRET_REDACTED]");
-        }
-        return scrubbed;
-      }
-      async ingestFile(filePath) {
-        try {
-          const realPath = realpathSync(filePath);
-          const projectRoot = resolve3(this.options.projectRoot);
-          const rel = relative(projectRoot, realPath);
-          if (rel.startsWith("..") || resolve3(realPath) !== resolve3(projectRoot, rel)) {
-            logger10.warn("Symlink traversal blocked \u2014 file resolves outside project root", {
-              filePath,
-              realPath,
-              projectRoot
-            });
-            return { fileId: "", entityIds: [], relationshipIds: [], status: "skipped", error: "Outside project root" };
-          }
-        } catch {
-        }
-        const ext = extname2(filePath).slice(1).toLowerCase();
-        if (!getParser(ext)) {
-          logger10.debug("Unsupported file type, skipping", { filePath, ext });
-          return { fileId: "", entityIds: [], relationshipIds: [], status: "skipped" };
-        }
-        let stat;
-        try {
-          stat = statSync(filePath);
-        } catch {
-          return { fileId: "", entityIds: [], relationshipIds: [], status: "failed", error: "File not found" };
-        }
-        if (stat.size > this.options.maxFileSize) {
-          logger10.warn("File too large, skipping", { filePath, size: stat.size, max: this.options.maxFileSize });
-          return { fileId: "", entityIds: [], relationshipIds: [], status: "skipped", error: "File too large" };
-        }
-        let content;
-        try {
-          content = readFileSync4(filePath, "utf-8");
-        } catch (err) {
-          return {
-            fileId: "",
-            entityIds: [],
-            relationshipIds: [],
-            status: "failed",
-            error: `Read error: ${err instanceof Error ? err.message : String(err)}`
-          };
-        }
-        const parser = getParser(ext, filePath, content);
-        const contentHash = createHash2("sha256").update(content).digest("hex");
-        const existingFile = await this.store.getFile(filePath);
-        if (existingFile && existingFile.contentHash === contentHash && existingFile.status === "ingested") {
-          logger10.debug("File unchanged, skipping", { filePath });
-          return {
-            fileId: existingFile.id,
-            entityIds: existingFile.entityIds,
-            relationshipIds: [],
-            status: "ingested"
-          };
-        }
-        if (!this.store.tryAcquireFileLock(filePath, this.options.projectId)) {
-          logger10.info("File is being processed by another process, skipping", { filePath });
-          return { fileId: "", entityIds: [], relationshipIds: [], status: "skipped", error: "Already being processed" };
-        }
-        const relativePath = relative(this.options.projectRoot, filePath);
-        try {
-          logger10.debug("Parsing file", { filePath, ext });
-          const parseResult = await parser.parse(content, filePath);
-          const chunks = chunkSections(parseResult.sections);
-          logger10.debug("Chunked file", { filePath, chunks: chunks.length });
-          const allEntities = [];
-          let extractionErrors = 0;
-          for (const chunk of chunks) {
-            const { entities, hadError } = await this.extractEntities(chunk, filePath, ext);
-            if (hadError)
-              extractionErrors++;
-            allEntities.push(...entities);
-          }
-          if (allEntities.length === 0 && extractionErrors > 0 && chunks.length > 0) {
-            throw new CortexError(LLM_EXTRACTION_FAILED, "high", "llm", `Entity extraction failed for all ${chunks.length} chunk(s) in ${filePath}`);
-          }
-          const deduped = this.deduplicateEntities(allEntities);
-          logger10.debug("Extracted entities", { filePath, raw: allEntities.length, deduped: deduped.length });
-          const storedEntities = [];
-          this.store.transaction(() => {
-            if (existingFile) {
-              this.store.deleteEntitiesBySourceFile(filePath);
-            }
-            for (const entity of deduped) {
-              storedEntities.push(this.store.createEntitySync(entity));
-            }
-          });
-          for (const stored of storedEntities) {
-            eventBus.emit({
-              type: "entity.created",
-              payload: { entity: stored },
-              timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-              source: "ingest:pipeline"
-            });
-          }
-          await runMergeDetection(storedEntities, filePath, this.store, this.router, this.options.mergeConfidenceThreshold);
-          await runContradictionDetection(storedEntities, filePath, this.options.projectId, this.options.projectPrivacyLevel, this.store, this.router, this.checkedContradictionPairs);
-          const relationshipIds = [];
-          if (storedEntities.length >= 2) {
-            const rels = await this.inferRelationships(storedEntities);
-            relationshipIds.push(...rels);
-          }
-          const entityIds = storedEntities.map((e) => e.id);
-          const fileRecord = await this.store.upsertFile({
-            path: filePath,
-            relativePath,
-            projectId: this.options.projectId,
-            contentHash,
-            fileType: ext,
-            sizeBytes: stat.size,
-            lastModified: stat.mtime.toISOString(),
-            lastIngestedAt: (/* @__PURE__ */ new Date()).toISOString(),
-            entityIds,
-            status: "ingested"
-          });
-          eventBus.emit({
-            type: "file.ingested",
-            payload: { fileId: fileRecord.id, entityIds, relationshipIds },
-            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-            source: "ingest:pipeline"
-          });
-          logger10.info("File ingested", {
-            filePath: relativePath,
-            entities: entityIds.length,
-            relationships: relationshipIds.length
-          });
-          return { fileId: fileRecord.id, entityIds, relationshipIds, status: "ingested" };
-        } catch (err) {
-          const errorMsg = err instanceof Error ? err.message : String(err);
-          logger10.error("Ingestion failed", { filePath, error: errorMsg });
-          this.store.releaseFileLock(filePath);
-          await this.store.upsertFile({
-            path: filePath,
-            relativePath,
-            projectId: this.options.projectId,
-            contentHash,
-            fileType: ext,
-            sizeBytes: stat.size,
-            lastModified: stat.mtime.toISOString(),
-            entityIds: [],
-            status: "failed",
-            parseError: errorMsg
-          });
-          return { fileId: "", entityIds: [], relationshipIds: [], status: "failed", error: errorMsg };
-        }
-      }
-      async extractEntities(chunk, filePath, fileType) {
-        const contentHash = createHash2("sha256").update(chunk.content).digest("hex");
-        const privacyOverride = this.options.projectPrivacyLevel !== "standard" ? { forceProvider: "local" } : {};
-        const safeContent = this.options.projectPrivacyLevel === "standard" ? this.scrubSecrets(chunk.content) : chunk.content;
-        try {
-          const result = await this.router.completeStructured({
-            systemPrompt: entity_extraction_exports.systemPrompt,
-            userPrompt: entity_extraction_exports.buildUserPrompt({
-              filePath,
-              projectName: this.options.projectName,
-              fileType,
-              content: safeContent
-            }),
-            promptId: entity_extraction_exports.PROMPT_ID,
-            promptVersion: entity_extraction_exports.PROMPT_VERSION,
-            task: LLMTask.ENTITY_EXTRACTION,
-            modelPreference: entity_extraction_exports.config.model,
-            temperature: entity_extraction_exports.config.temperature,
-            maxTokens: entity_extraction_exports.config.maxTokens,
-            contentHash,
-            ...privacyOverride
-          }, entity_extraction_exports.outputSchema);
-          return {
-            entities: result.data.entities.map((e) => ({
-              type: e.type,
-              name: e.name,
-              content: e.content,
-              summary: e.summary,
-              properties: e.properties,
-              confidence: e.confidence,
-              sourceFile: filePath,
-              sourceRange: { startLine: chunk.startLine, endLine: chunk.endLine },
-              projectId: this.options.projectId,
-              extractedBy: {
-                promptId: entity_extraction_exports.PROMPT_ID,
-                promptVersion: entity_extraction_exports.PROMPT_VERSION,
-                model: result.model,
-                provider: result.provider,
-                tokensUsed: { input: result.inputTokens, output: result.outputTokens },
-                timestamp: (/* @__PURE__ */ new Date()).toISOString()
-              },
-              tags: e.tags,
-              status: "active"
-            })),
-            hadError: false
-          };
-        } catch (err) {
-          logger10.warn("Entity extraction failed for chunk", {
-            filePath,
-            chunk: chunk.index,
-            error: err instanceof Error ? err.message : String(err)
-          });
-          return { entities: [], hadError: true };
-        }
-      }
-      async inferRelationships(entities) {
-        const privacyOverride = this.options.projectPrivacyLevel !== "standard" ? { forceProvider: "local" } : {};
-        try {
-          const result = await this.router.completeStructured({
-            systemPrompt: relationship_inference_exports.systemPrompt,
-            userPrompt: relationship_inference_exports.buildUserPrompt({
-              entities: entities.map((e) => ({
-                id: e.id,
-                type: e.type,
-                name: e.name,
-                summary: e.summary,
-                sourceFile: e.sourceFile
-              }))
-            }),
-            promptId: relationship_inference_exports.PROMPT_ID,
-            promptVersion: relationship_inference_exports.PROMPT_VERSION,
-            task: LLMTask.RELATIONSHIP_INFERENCE,
-            modelPreference: relationship_inference_exports.config.model,
-            temperature: relationship_inference_exports.config.temperature,
-            maxTokens: relationship_inference_exports.config.maxTokens,
-            ...privacyOverride
-          }, relationship_inference_exports.outputSchema);
-          const entityIdSet = new Set(entities.map((e) => e.id));
-          const relationshipIds = [];
-          for (const rel of result.data.relationships) {
-            if (!entityIdSet.has(rel.sourceEntityId) || !entityIdSet.has(rel.targetEntityId)) {
-              continue;
-            }
-            const stored = await this.store.createRelationship({
-              type: rel.type,
-              sourceEntityId: rel.sourceEntityId,
-              targetEntityId: rel.targetEntityId,
-              description: rel.description,
-              confidence: rel.confidence,
-              properties: {},
-              extractedBy: {
-                promptId: relationship_inference_exports.PROMPT_ID,
-                promptVersion: relationship_inference_exports.PROMPT_VERSION,
-                model: result.model,
-                provider: result.provider,
-                tokensUsed: { input: result.inputTokens, output: result.outputTokens },
-                timestamp: (/* @__PURE__ */ new Date()).toISOString()
-              }
-            });
-            relationshipIds.push(stored.id);
-            eventBus.emit({
-              type: "relationship.created",
-              payload: { relationship: stored },
-              timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-              source: "ingest:pipeline"
-            });
-          }
-          return relationshipIds;
-        } catch (err) {
-          logger10.warn("Relationship inference failed", {
-            error: err instanceof Error ? err.message : String(err)
-          });
-          return [];
-        }
-      }
-      deduplicateEntities(entities) {
-        const seen = /* @__PURE__ */ new Map();
-        for (const entity of entities) {
-          const key = `${entity.type}:${(entity.name ?? "").toLowerCase()}`;
-          const existing = seen.get(key);
-          if (!existing || entity.confidence > existing.confidence) {
-            seen.set(key, entity);
-          }
-        }
-        return [...seen.values()];
-      }
-    };
-  }
-});
-
-// packages/ingest/dist/index.js
-var dist_exports = {};
-__export(dist_exports, {
-  ConversationParser: () => ConversationParser,
-  FileWatcher: () => FileWatcher,
-  IngestionPipeline: () => IngestionPipeline,
-  JsonParser: () => JsonParser,
-  MarkdownParser: () => MarkdownParser,
-  TypeScriptParser: () => TypeScriptParser,
-  YamlParser: () => YamlParser,
-  chunkSections: () => chunkSections,
-  compileSecretPattern: () => compileSecretPattern,
-  compileSecretPatterns: () => compileSecretPatterns,
-  getParser: () => getParser,
-  getSupportedExtensions: () => getSupportedExtensions,
-  isConversationJson: () => isConversationJson,
-  isConversationMarkdown: () => isConversationMarkdown
-});
-var init_dist3 = __esm({
-  "packages/ingest/dist/index.js"() {
-    "use strict";
-    init_parsers();
-    init_markdown();
-    init_typescript();
-    init_json_parser();
-    init_yaml_parser();
-    init_conversation();
-    init_chunker();
-    init_watcher();
-    init_pipeline();
-    init_secret_patterns();
-  }
-});
-
 // packages/graph/dist/migrations/001-initial.js
 function up(db) {
   db.exec(`
@@ -4249,7 +3789,7 @@ var init_add_indexes = __esm({
 // packages/graph/dist/sqlite-store.js
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import { copyFileSync, statSync as statSync2, mkdirSync as mkdirSync3, chmodSync } from "node:fs";
+import { copyFileSync, statSync, mkdirSync as mkdirSync3, chmodSync } from "node:fs";
 import { dirname } from "node:path";
 import { homedir as homedir4 } from "node:os";
 function resolveHomePath(p) {
@@ -4371,7 +3911,7 @@ var init_sqlite_store = __esm({
       }
       backupSync() {
         try {
-          const stat = statSync2(this.dbPath);
+          const stat = statSync(this.dbPath);
           if (stat.isFile()) {
             const backupPath = `${this.dbPath}.backup`;
             copyFileSync(this.dbPath, backupPath);
@@ -4829,7 +4369,7 @@ var init_sqlite_store = __esm({
         const contradictionCount = this.db.prepare("SELECT COUNT(*) as count FROM contradictions WHERE status = 'active'").get().count;
         let dbSizeBytes = 0;
         try {
-          dbSizeBytes = statSync2(this.dbPath).size;
+          dbSizeBytes = statSync(this.dbPath).size;
         } catch {
         }
         return {
@@ -5027,12 +4567,20 @@ import { homedir as homedir5 } from "node:os";
 function resolveHomePath2(p) {
   return p.startsWith("~") ? p.replace("~", homedir5()) : p;
 }
-var logger11, TABLE_NAME, VectorStore;
+function entityEmbeddingText(e) {
+  const parts = [`${e.type}: ${e.name}`];
+  if (e.summary)
+    parts.push(e.summary);
+  if (e.content)
+    parts.push(e.content);
+  return parts.join("\n").slice(0, 8e3);
+}
+var logger8, TABLE_NAME, VectorStore;
 var init_vector_store = __esm({
   "packages/graph/dist/vector-store.js"() {
     "use strict";
     init_dist();
-    logger11 = createLogger("graph:vector-store");
+    logger8 = createLogger("graph:vector-store");
     TABLE_NAME = "entity_embeddings";
     VectorStore = class {
       db = null;
@@ -5049,7 +4597,7 @@ var init_vector_store = __esm({
         try {
           this.table = await this.db.openTable(TABLE_NAME);
         } catch {
-          logger11.debug("Vector table does not exist yet, will create on first add");
+          logger8.debug("Vector table does not exist yet, will create on first add");
         }
       }
       async ensureTable() {
@@ -5079,7 +4627,7 @@ var init_vector_store = __esm({
           text: r.text
         }));
         await table.add(rows);
-        logger11.debug(`Added ${rows.length} vectors`);
+        logger8.debug(`Added ${rows.length} vectors`);
       }
       async search(queryVector, limit = 20) {
         if (!this.table)
@@ -5096,6 +4644,16 @@ var init_vector_store = __esm({
           return;
         await this.table.delete(`entityId = "${entityId}"`);
       }
+      /** Drop all stored vectors (used for a full reindex). The table is recreated on next add. */
+      async clear() {
+        if (!this.db)
+          throw new Error("VectorStore not initialized");
+        try {
+          await this.db.dropTable(TABLE_NAME);
+        } catch {
+        }
+        this.table = null;
+      }
       async count() {
         if (!this.table)
           return 0;
@@ -5109,12 +4667,12 @@ var init_vector_store = __esm({
 function estimateTokens2(text) {
   return Math.ceil(text.length / AVG_CHARS_PER_TOKEN2);
 }
-var logger12, AVG_CHARS_PER_TOKEN2, FTS_STOP_WORDS, QueryEngine;
+var logger9, AVG_CHARS_PER_TOKEN2, FTS_STOP_WORDS, QueryEngine;
 var init_query_engine = __esm({
   "packages/graph/dist/query-engine.js"() {
     "use strict";
     init_dist();
-    logger12 = createLogger("graph:query-engine");
+    logger9 = createLogger("graph:query-engine");
     AVG_CHARS_PER_TOKEN2 = 4;
     FTS_STOP_WORDS = /* @__PURE__ */ new Set([
       "a",
@@ -5223,7 +4781,10 @@ var init_query_engine = __esm({
           this.ftsSearch(query, projectId),
           queryEmbedding ? this.vectorStore.search(queryEmbedding, 30) : Promise.resolve([])
         ]);
-        const rankedEntities = this.mergeAndRank(ftsResults, vectorResults);
+        const ftsIds = new Set(ftsResults.map((e) => e.id));
+        const vectorOnlyIds = vectorResults.map((v) => v.entityId).filter((id) => !ftsIds.has(id));
+        const vectorOnlyEntities = vectorOnlyIds.length ? (await Promise.all(vectorOnlyIds.map((id) => this.sqliteStore.getEntity(id).catch(() => null)))).filter((e) => e !== null) : [];
+        const rankedEntities = this.mergeAndRank(ftsResults, vectorResults, vectorOnlyEntities);
         const contextEntities = [];
         let totalTokens = 0;
         const budgetForEntities = Math.floor(this.maxContextTokens * 0.7);
@@ -5242,7 +4803,7 @@ var init_query_engine = __esm({
         const uniqueRels = allRels.filter((r) => entityIds.has(r.sourceEntityId) && entityIds.has(r.targetEntityId));
         const relTokens = uniqueRels.reduce((sum, r) => sum + estimateTokens2(r.description ?? "") + 20, 0);
         const filteredTokens = privacyFiltered.reduce((sum, e) => sum + estimateTokens2(e.content) + estimateTokens2(e.name), 0);
-        logger12.debug("Context assembled", {
+        logger9.debug("Context assembled", {
           entities: privacyFiltered.length,
           entitiesFiltered: contextEntities.length - privacyFiltered.length,
           relationships: uniqueRels.length,
@@ -5282,7 +4843,7 @@ var init_query_engine = __esm({
           filtered.push(entity);
         }
         if (excluded > 0 || redacted > 0) {
-          logger12.info("Privacy filter applied", { excluded, redacted, kept: filtered.length });
+          logger9.info("Privacy filter applied", { excluded, redacted, kept: filtered.length });
         }
         return filtered;
       }
@@ -5311,22 +4872,27 @@ var init_query_engine = __esm({
           }
           return await this.sqliteStore.searchEntities(ftsQuery, 30);
         } catch (err) {
-          logger12.warn("FTS search failed, returning empty results", {
+          logger9.warn("FTS search failed, returning empty results", {
             error: err instanceof Error ? err.message : String(err),
             query: ftsQuery
           });
           return [];
         }
       }
-      mergeAndRank(ftsResults, vectorResults) {
+      mergeAndRank(ftsResults, vectorResults, vectorOnlyEntities = []) {
         const scores = /* @__PURE__ */ new Map();
+        for (const entity of vectorOnlyEntities) {
+          scores.set(entity.id, { entity, score: 0 });
+        }
         for (let i = 0; i < ftsResults.length; i++) {
           const entity = ftsResults[i];
           const positionScore = 1 - i / Math.max(ftsResults.length, 1);
-          scores.set(entity.id, {
-            entity,
-            score: positionScore * this.ftsWeight
-          });
+          const existing = scores.get(entity.id);
+          if (existing) {
+            existing.score += positionScore * this.ftsWeight;
+          } else {
+            scores.set(entity.id, { entity, score: positionScore * this.ftsWeight });
+          }
         }
         if (vectorResults.length > 0) {
           const maxDist = Math.max(...vectorResults.map((r) => r.distance), 1);
@@ -5345,12 +4911,565 @@ var init_query_engine = __esm({
 });
 
 // packages/graph/dist/index.js
-var init_dist4 = __esm({
+var init_dist3 = __esm({
   "packages/graph/dist/index.js"() {
     "use strict";
     init_sqlite_store();
     init_vector_store();
     init_query_engine();
+  }
+});
+
+// packages/ingest/dist/secret-patterns.js
+function compileSecretPattern(pattern) {
+  try {
+    let source = pattern;
+    let flags = "gi";
+    if (source.startsWith("(?i)")) {
+      source = source.slice(4);
+      flags = "gi";
+    }
+    return new RegExp(source, flags);
+  } catch {
+    logger10.warn("Invalid secret pattern, skipping", { pattern });
+    return null;
+  }
+}
+function compileSecretPatterns(patterns) {
+  return patterns.map((pattern) => compileSecretPattern(pattern)).filter((re) => re !== null);
+}
+var logger10;
+var init_secret_patterns = __esm({
+  "packages/ingest/dist/secret-patterns.js"() {
+    "use strict";
+    init_dist();
+    logger10 = createLogger("ingest:secret-patterns");
+  }
+});
+
+// packages/ingest/dist/post-ingest.js
+async function runMergeDetection(entities, sourceFile, store, router, mergeConfidenceThreshold) {
+  if (!router.getLocalProvider()) {
+    return;
+  }
+  for (const entity of entities) {
+    let candidates;
+    try {
+      candidates = await store.searchEntities(entity.name, 5);
+    } catch {
+      continue;
+    }
+    const others = candidates.filter((c) => c.id !== entity.id && c.sourceFile !== sourceFile && c.status !== "superseded" && c.type === entity.type);
+    for (const candidate of others) {
+      try {
+        const result = await router.completeStructured({
+          systemPrompt: merge_detection_exports.systemPrompt,
+          userPrompt: merge_detection_exports.buildUserPrompt({
+            a: { type: entity.type, name: entity.name, summary: entity.summary, sourceFile: entity.sourceFile },
+            b: { type: candidate.type, name: candidate.name, summary: candidate.summary, sourceFile: candidate.sourceFile }
+          }),
+          promptId: merge_detection_exports.PROMPT_ID,
+          promptVersion: merge_detection_exports.PROMPT_VERSION,
+          task: LLMTask.ENTITY_EXTRACTION,
+          temperature: merge_detection_exports.config.temperature,
+          maxTokens: merge_detection_exports.config.maxTokens,
+          forceProvider: "local"
+        }, merge_detection_exports.outputSchema);
+        if (result.data.shouldMerge && result.data.confidence >= mergeConfidenceThreshold) {
+          await store.updateEntity(candidate.id, { status: "superseded" });
+          eventBus.emit({
+            type: "entity.merged",
+            payload: { survivorId: entity.id, mergedId: candidate.id },
+            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+            source: "ingest:post-ingest"
+          });
+          logger11.info("Entity merged", {
+            survivor: entity.name,
+            merged: candidate.name,
+            confidence: result.data.confidence,
+            reason: result.data.reason
+          });
+        }
+      } catch (err) {
+        logger11.debug("Merge detection failed for pair", {
+          entity: entity.name,
+          candidate: candidate.name,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
+  }
+}
+async function runContradictionDetection(entities, sourceFile, projectId, privacyLevel, store, router, checkedEntityPairs = /* @__PURE__ */ new Set()) {
+  if (privacyLevel === "restricted") {
+    return;
+  }
+  const privacyForce = privacyLevel === "sensitive" ? { forceProvider: "local" } : {};
+  const contradictedFilePairs = /* @__PURE__ */ new Set();
+  for (const entity of entities) {
+    let candidates;
+    try {
+      candidates = await store.searchEntities(entity.name, 5);
+    } catch {
+      continue;
+    }
+    const others = candidates.filter((c) => c.id !== entity.id && c.sourceFile !== sourceFile && c.status !== "superseded" && c.type === entity.type);
+    for (const candidate of others) {
+      const filePairKey = [entity.sourceFile, candidate.sourceFile].sort().join("\0");
+      if (contradictedFilePairs.has(filePairKey))
+        continue;
+      const entityPairKey = [entity.id, candidate.id].sort().join("\0");
+      if (checkedEntityPairs.has(entityPairKey))
+        continue;
+      checkedEntityPairs.add(entityPairKey);
+      try {
+        const result = await router.completeStructured({
+          systemPrompt: contradiction_detection_exports.systemPrompt,
+          userPrompt: contradiction_detection_exports.buildUserPrompt({
+            a: {
+              type: entity.type,
+              name: entity.name,
+              content: entity.summary ?? entity.content,
+              createdAt: entity.createdAt,
+              sourceFile: entity.sourceFile
+            },
+            b: {
+              type: candidate.type,
+              name: candidate.name,
+              content: candidate.summary ?? candidate.content,
+              createdAt: candidate.createdAt,
+              sourceFile: candidate.sourceFile
+            }
+          }),
+          promptId: contradiction_detection_exports.PROMPT_ID,
+          promptVersion: contradiction_detection_exports.PROMPT_VERSION,
+          task: LLMTask.CONTRADICTION_DETECTION,
+          temperature: contradiction_detection_exports.config.temperature,
+          maxTokens: contradiction_detection_exports.config.maxTokens,
+          ...privacyForce
+        }, contradiction_detection_exports.outputSchema);
+        if (result.data.isContradiction) {
+          contradictedFilePairs.add(filePairKey);
+          const contradiction = await store.createContradiction({
+            entityIds: [entity.id, candidate.id],
+            description: result.data.description,
+            severity: result.data.severity,
+            suggestedResolution: result.data.suggestedResolution,
+            status: "active",
+            detectedAt: (/* @__PURE__ */ new Date()).toISOString()
+          });
+          eventBus.emit({
+            type: "contradiction.detected",
+            payload: { contradiction },
+            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+            source: "ingest:post-ingest"
+          });
+          logger11.info("Contradiction detected", {
+            entityA: entity.name,
+            entityB: candidate.name,
+            severity: result.data.severity
+          });
+        }
+      } catch (err) {
+        logger11.debug("Contradiction detection failed for pair", {
+          entity: entity.name,
+          candidate: candidate.name,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
+  }
+}
+var logger11;
+var init_post_ingest = __esm({
+  "packages/ingest/dist/post-ingest.js"() {
+    "use strict";
+    init_dist();
+    init_dist2();
+    logger11 = createLogger("ingest:post-ingest");
+  }
+});
+
+// packages/ingest/dist/pipeline.js
+import { readFileSync as readFileSync4, statSync as statSync2, realpathSync } from "node:fs";
+import { relative, extname as extname2, resolve as resolve3 } from "node:path";
+import { createHash as createHash2 } from "node:crypto";
+var logger12, IngestionPipeline;
+var init_pipeline = __esm({
+  "packages/ingest/dist/pipeline.js"() {
+    "use strict";
+    init_dist();
+    init_dist2();
+    init_dist3();
+    init_parsers();
+    init_chunker();
+    init_secret_patterns();
+    init_post_ingest();
+    logger12 = createLogger("ingest:pipeline");
+    IngestionPipeline = class {
+      router;
+      store;
+      options;
+      vectorStore;
+      // Shared across all ingestFile calls — prevents the same entity pair from being
+      // evaluated twice when multiple files ingest in the same batch.
+      checkedContradictionPairs = /* @__PURE__ */ new Set();
+      // Pre-compiled secret patterns for scrubbing before cloud LLM calls
+      compiledSecretPatterns;
+      constructor(router, store, options, vectorStore) {
+        this.router = router;
+        this.store = store;
+        this.options = options;
+        this.vectorStore = vectorStore;
+        this.compiledSecretPatterns = compileSecretPatterns(options.secretPatterns ?? []);
+      }
+      /**
+       * Scrub secrets from content before sending to cloud LLMs.
+       * Only applied for standard privacy (sensitive/restricted use local provider).
+       */
+      scrubSecrets(content) {
+        if (this.compiledSecretPatterns.length === 0)
+          return content;
+        let scrubbed = content;
+        for (const re of this.compiledSecretPatterns) {
+          re.lastIndex = 0;
+          scrubbed = scrubbed.replace(re, "[SECRET_REDACTED]");
+        }
+        return scrubbed;
+      }
+      async ingestFile(filePath) {
+        try {
+          const realPath = realpathSync(filePath);
+          const projectRoot = resolve3(this.options.projectRoot);
+          const rel = relative(projectRoot, realPath);
+          if (rel.startsWith("..") || resolve3(realPath) !== resolve3(projectRoot, rel)) {
+            logger12.warn("Symlink traversal blocked \u2014 file resolves outside project root", {
+              filePath,
+              realPath,
+              projectRoot
+            });
+            return { fileId: "", entityIds: [], relationshipIds: [], status: "skipped", error: "Outside project root" };
+          }
+        } catch {
+        }
+        const ext = extname2(filePath).slice(1).toLowerCase();
+        if (!getParser(ext)) {
+          logger12.debug("Unsupported file type, skipping", { filePath, ext });
+          return { fileId: "", entityIds: [], relationshipIds: [], status: "skipped" };
+        }
+        let stat;
+        try {
+          stat = statSync2(filePath);
+        } catch {
+          return { fileId: "", entityIds: [], relationshipIds: [], status: "failed", error: "File not found" };
+        }
+        if (stat.size > this.options.maxFileSize) {
+          logger12.warn("File too large, skipping", { filePath, size: stat.size, max: this.options.maxFileSize });
+          return { fileId: "", entityIds: [], relationshipIds: [], status: "skipped", error: "File too large" };
+        }
+        let content;
+        try {
+          content = readFileSync4(filePath, "utf-8");
+        } catch (err) {
+          return {
+            fileId: "",
+            entityIds: [],
+            relationshipIds: [],
+            status: "failed",
+            error: `Read error: ${err instanceof Error ? err.message : String(err)}`
+          };
+        }
+        const parser = getParser(ext, filePath, content);
+        const contentHash = createHash2("sha256").update(content).digest("hex");
+        const existingFile = await this.store.getFile(filePath);
+        if (existingFile && existingFile.contentHash === contentHash && existingFile.status === "ingested") {
+          logger12.debug("File unchanged, skipping", { filePath });
+          return {
+            fileId: existingFile.id,
+            entityIds: existingFile.entityIds,
+            relationshipIds: [],
+            status: "ingested"
+          };
+        }
+        if (!this.store.tryAcquireFileLock(filePath, this.options.projectId)) {
+          logger12.info("File is being processed by another process, skipping", { filePath });
+          return { fileId: "", entityIds: [], relationshipIds: [], status: "skipped", error: "Already being processed" };
+        }
+        const relativePath = relative(this.options.projectRoot, filePath);
+        try {
+          logger12.debug("Parsing file", { filePath, ext });
+          const parseResult = await parser.parse(content, filePath);
+          const chunks = chunkSections(parseResult.sections);
+          logger12.debug("Chunked file", { filePath, chunks: chunks.length });
+          const allEntities = [];
+          let extractionErrors = 0;
+          for (const chunk of chunks) {
+            const { entities, hadError } = await this.extractEntities(chunk, filePath, ext);
+            if (hadError)
+              extractionErrors++;
+            allEntities.push(...entities);
+          }
+          if (allEntities.length === 0 && extractionErrors > 0 && chunks.length > 0) {
+            throw new CortexError(LLM_EXTRACTION_FAILED, "high", "llm", `Entity extraction failed for all ${chunks.length} chunk(s) in ${filePath}`);
+          }
+          const deduped = this.deduplicateEntities(allEntities);
+          logger12.debug("Extracted entities", { filePath, raw: allEntities.length, deduped: deduped.length });
+          const storedEntities = [];
+          this.store.transaction(() => {
+            if (existingFile) {
+              this.store.deleteEntitiesBySourceFile(filePath);
+            }
+            for (const entity of deduped) {
+              storedEntities.push(this.store.createEntitySync(entity));
+            }
+          });
+          for (const stored of storedEntities) {
+            eventBus.emit({
+              type: "entity.created",
+              payload: { entity: stored },
+              timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+              source: "ingest:pipeline"
+            });
+          }
+          await this.indexEmbeddings(storedEntities, existingFile?.entityIds ?? []);
+          await runMergeDetection(storedEntities, filePath, this.store, this.router, this.options.mergeConfidenceThreshold);
+          await runContradictionDetection(storedEntities, filePath, this.options.projectId, this.options.projectPrivacyLevel, this.store, this.router, this.checkedContradictionPairs);
+          const relationshipIds = [];
+          if (storedEntities.length >= 2) {
+            const rels = await this.inferRelationships(storedEntities);
+            relationshipIds.push(...rels);
+          }
+          const entityIds = storedEntities.map((e) => e.id);
+          const fileRecord = await this.store.upsertFile({
+            path: filePath,
+            relativePath,
+            projectId: this.options.projectId,
+            contentHash,
+            fileType: ext,
+            sizeBytes: stat.size,
+            lastModified: stat.mtime.toISOString(),
+            lastIngestedAt: (/* @__PURE__ */ new Date()).toISOString(),
+            entityIds,
+            status: "ingested"
+          });
+          eventBus.emit({
+            type: "file.ingested",
+            payload: { fileId: fileRecord.id, entityIds, relationshipIds },
+            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+            source: "ingest:pipeline"
+          });
+          logger12.info("File ingested", {
+            filePath: relativePath,
+            entities: entityIds.length,
+            relationships: relationshipIds.length
+          });
+          return { fileId: fileRecord.id, entityIds, relationshipIds, status: "ingested" };
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          logger12.error("Ingestion failed", { filePath, error: errorMsg });
+          this.store.releaseFileLock(filePath);
+          await this.store.upsertFile({
+            path: filePath,
+            relativePath,
+            projectId: this.options.projectId,
+            contentHash,
+            fileType: ext,
+            sizeBytes: stat.size,
+            lastModified: stat.mtime.toISOString(),
+            entityIds: [],
+            status: "failed",
+            parseError: errorMsg
+          });
+          return { fileId: "", entityIds: [], relationshipIds: [], status: "failed", error: errorMsg };
+        }
+      }
+      async extractEntities(chunk, filePath, fileType) {
+        const contentHash = createHash2("sha256").update(chunk.content).digest("hex");
+        const privacyOverride = this.options.projectPrivacyLevel !== "standard" ? { forceProvider: "local" } : {};
+        const safeContent = this.options.projectPrivacyLevel === "standard" ? this.scrubSecrets(chunk.content) : chunk.content;
+        try {
+          const result = await this.router.completeStructured({
+            systemPrompt: entity_extraction_exports.systemPrompt,
+            userPrompt: entity_extraction_exports.buildUserPrompt({
+              filePath,
+              projectName: this.options.projectName,
+              fileType,
+              content: safeContent
+            }),
+            promptId: entity_extraction_exports.PROMPT_ID,
+            promptVersion: entity_extraction_exports.PROMPT_VERSION,
+            task: LLMTask.ENTITY_EXTRACTION,
+            modelPreference: entity_extraction_exports.config.model,
+            temperature: entity_extraction_exports.config.temperature,
+            maxTokens: entity_extraction_exports.config.maxTokens,
+            contentHash,
+            ...privacyOverride
+          }, entity_extraction_exports.outputSchema);
+          return {
+            entities: result.data.entities.map((e) => ({
+              type: e.type,
+              name: e.name,
+              content: e.content,
+              summary: e.summary,
+              properties: e.properties,
+              confidence: e.confidence,
+              sourceFile: filePath,
+              sourceRange: { startLine: chunk.startLine, endLine: chunk.endLine },
+              projectId: this.options.projectId,
+              extractedBy: {
+                promptId: entity_extraction_exports.PROMPT_ID,
+                promptVersion: entity_extraction_exports.PROMPT_VERSION,
+                model: result.model,
+                provider: result.provider,
+                tokensUsed: { input: result.inputTokens, output: result.outputTokens },
+                timestamp: (/* @__PURE__ */ new Date()).toISOString()
+              },
+              tags: e.tags,
+              status: "active"
+            })),
+            hadError: false
+          };
+        } catch (err) {
+          logger12.warn("Entity extraction failed for chunk", {
+            filePath,
+            chunk: chunk.index,
+            error: err instanceof Error ? err.message : String(err)
+          });
+          return { entities: [], hadError: true };
+        }
+      }
+      async inferRelationships(entities) {
+        const privacyOverride = this.options.projectPrivacyLevel !== "standard" ? { forceProvider: "local" } : {};
+        try {
+          const result = await this.router.completeStructured({
+            systemPrompt: relationship_inference_exports.systemPrompt,
+            userPrompt: relationship_inference_exports.buildUserPrompt({
+              entities: entities.map((e) => ({
+                id: e.id,
+                type: e.type,
+                name: e.name,
+                summary: e.summary,
+                sourceFile: e.sourceFile
+              }))
+            }),
+            promptId: relationship_inference_exports.PROMPT_ID,
+            promptVersion: relationship_inference_exports.PROMPT_VERSION,
+            task: LLMTask.RELATIONSHIP_INFERENCE,
+            modelPreference: relationship_inference_exports.config.model,
+            temperature: relationship_inference_exports.config.temperature,
+            maxTokens: relationship_inference_exports.config.maxTokens,
+            ...privacyOverride
+          }, relationship_inference_exports.outputSchema);
+          const entityIdSet = new Set(entities.map((e) => e.id));
+          const relationshipIds = [];
+          for (const rel of result.data.relationships) {
+            if (!entityIdSet.has(rel.sourceEntityId) || !entityIdSet.has(rel.targetEntityId)) {
+              continue;
+            }
+            const stored = await this.store.createRelationship({
+              type: rel.type,
+              sourceEntityId: rel.sourceEntityId,
+              targetEntityId: rel.targetEntityId,
+              description: rel.description,
+              confidence: rel.confidence,
+              properties: {},
+              extractedBy: {
+                promptId: relationship_inference_exports.PROMPT_ID,
+                promptVersion: relationship_inference_exports.PROMPT_VERSION,
+                model: result.model,
+                provider: result.provider,
+                tokensUsed: { input: result.inputTokens, output: result.outputTokens },
+                timestamp: (/* @__PURE__ */ new Date()).toISOString()
+              }
+            });
+            relationshipIds.push(stored.id);
+            eventBus.emit({
+              type: "relationship.created",
+              payload: { relationship: stored },
+              timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+              source: "ingest:pipeline"
+            });
+          }
+          return relationshipIds;
+        } catch (err) {
+          logger12.warn("Relationship inference failed", {
+            error: err instanceof Error ? err.message : String(err)
+          });
+          return [];
+        }
+      }
+      /**
+       * Generate and store semantic embeddings for the given entities. Best-effort: failures
+       * are logged but never fail ingestion. Skipped when no vector store / embedding provider
+       * is configured, or for non-standard privacy projects (whose content must not reach the cloud).
+       */
+      async indexEmbeddings(entities, replacedEntityIds) {
+        if (!this.vectorStore || !this.router.hasEmbeddings())
+          return;
+        if (this.options.projectPrivacyLevel !== "standard")
+          return;
+        try {
+          for (const oldId of replacedEntityIds) {
+            await this.vectorStore.deleteByEntityId(oldId);
+          }
+          if (entities.length === 0)
+            return;
+          const texts = entities.map((e) => this.scrubSecrets(entityEmbeddingText(e)));
+          const vectors = await this.router.embed(texts);
+          await this.vectorStore.addVectors(entities.map((e, i) => ({ entityId: e.id, vector: vectors[i], text: texts[i] })));
+          logger12.debug("Indexed embeddings", { count: entities.length });
+        } catch (err) {
+          logger12.warn("Embedding indexing failed (non-fatal)", {
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+      }
+      deduplicateEntities(entities) {
+        const seen = /* @__PURE__ */ new Map();
+        for (const entity of entities) {
+          const key = `${entity.type}:${(entity.name ?? "").toLowerCase()}`;
+          const existing = seen.get(key);
+          if (!existing || entity.confidence > existing.confidence) {
+            seen.set(key, entity);
+          }
+        }
+        return [...seen.values()];
+      }
+    };
+  }
+});
+
+// packages/ingest/dist/index.js
+var dist_exports = {};
+__export(dist_exports, {
+  ConversationParser: () => ConversationParser,
+  FileWatcher: () => FileWatcher,
+  IngestionPipeline: () => IngestionPipeline,
+  JsonParser: () => JsonParser,
+  MarkdownParser: () => MarkdownParser,
+  TypeScriptParser: () => TypeScriptParser,
+  YamlParser: () => YamlParser,
+  chunkSections: () => chunkSections,
+  compileSecretPattern: () => compileSecretPattern,
+  compileSecretPatterns: () => compileSecretPatterns,
+  getParser: () => getParser,
+  getSupportedExtensions: () => getSupportedExtensions,
+  isConversationJson: () => isConversationJson,
+  isConversationMarkdown: () => isConversationMarkdown
+});
+var init_dist4 = __esm({
+  "packages/ingest/dist/index.js"() {
+    "use strict";
+    init_parsers();
+    init_markdown();
+    init_typescript();
+    init_json_parser();
+    init_yaml_parser();
+    init_conversation();
+    init_chunker();
+    init_watcher();
+    init_pipeline();
+    init_secret_patterns();
   }
 });
 
@@ -7289,8 +7408,8 @@ function ipKeyGenerator(ip, ipv6Subnet = 56) {
   }
   return ip;
 }
-function validateLogger(logger38) {
-  if (typeof logger38 !== "object" || typeof logger38.error !== "function" || typeof logger38.warn !== "function") {
+function validateLogger(logger39) {
+  if (typeof logger39 !== "object" || typeof logger39.error !== "function" || typeof logger39.warn !== "function") {
     throw new TypeError(
       "Provided logger does not implement the Logger interface"
     );
@@ -7901,8 +8020,8 @@ var init_dist5 = __esm({
         }
       }
     };
-    getValidations = (_enabled, logger38) => {
-      validateLogger(logger38);
+    getValidations = (_enabled, logger39) => {
+      validateLogger(logger39);
       let enabled;
       if (typeof _enabled === "boolean") {
         enabled = {
@@ -7928,8 +8047,8 @@ var init_dist5 = __esm({
                 args
               );
             } catch (error) {
-              if (error instanceof ChangeWarning) logger38.warn(error);
-              else logger38.error(error);
+              if (error instanceof ChangeWarning) logger39.warn(error);
+              else logger39.error(error);
             }
           };
       }
@@ -7947,12 +8066,12 @@ var init_dist5 = __esm({
       const legacyStore = passedStore;
       class PromisifiedStore {
         async increment(key) {
-          return new Promise((resolve25, reject) => {
+          return new Promise((resolve26, reject) => {
             legacyStore.incr(
               key,
               (error, totalHits, resetTime) => {
                 if (error) reject(error);
-                resolve25({ totalHits, resetTime });
+                resolve26({ totalHits, resetTime });
               }
             );
           });
@@ -7980,10 +8099,10 @@ var init_dist5 = __esm({
     };
     parseOptions = (passedOptions) => {
       const notUndefinedOptions = omitUndefinedProperties(passedOptions);
-      const logger38 = passedOptions.logger ?? ConsoleLogger;
+      const logger39 = passedOptions.logger ?? ConsoleLogger;
       const validations2 = getValidations(
         notUndefinedOptions?.validate ?? true,
-        logger38
+        logger39
       );
       validations2.validationsConfig();
       validations2.knownOptions(passedOptions);
@@ -8060,7 +8179,7 @@ var init_dist5 = __esm({
         ),
         // Print an error to the console if a few known misconfigurations are detected.
         validations: validations2,
-        logger: logger38
+        logger: logger39
       };
       if (typeof config9.store.increment !== "function" || typeof config9.store.decrement !== "function" || typeof config9.store.resetKey !== "function" || config9.store.resetAll !== void 0 && typeof config9.store.resetAll !== "function" || config9.store.init !== void 0 && typeof config9.store.init !== "function") {
         throw new TypeError(
@@ -8101,9 +8220,9 @@ var init_dist5 = __esm({
       }
       const middleware = handleAsyncErrors(
         async (request, response, next) => {
-          const closePromise = config9.skipFailedRequests && new Promise((resolve25) => response.once("close", resolve25));
-          const finishPromise = (config9.skipFailedRequests || config9.skipSuccessfulRequests) && new Promise((resolve25) => response.once("finish", resolve25));
-          const errorPromise = config9.skipFailedRequests && new Promise((resolve25) => response.once("error", resolve25));
+          const closePromise = config9.skipFailedRequests && new Promise((resolve26) => response.once("close", resolve26));
+          const finishPromise = (config9.skipFailedRequests || config9.skipSuccessfulRequests) && new Promise((resolve26) => response.once("finish", resolve26));
+          const errorPromise = config9.skipFailedRequests && new Promise((resolve26) => response.once("error", resolve26));
           const skip = await config9.skip(request, response);
           if (skip) {
             next();
@@ -8254,7 +8373,7 @@ function createEntityRoutes(bundle) {
       });
       res.json({ success: true, data: entities, meta: { limit: parsedLimit, offset: parsedOffset } });
     } catch (err) {
-      logger28.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger29.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
@@ -8267,7 +8386,7 @@ function createEntityRoutes(bundle) {
       }
       res.json({ success: true, data: entity });
     } catch (err) {
-      logger28.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger29.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
@@ -8277,18 +8396,18 @@ function createEntityRoutes(bundle) {
       const relationships = await store.getRelationshipsForEntity(req.params.id, direction);
       res.json({ success: true, data: relationships });
     } catch (err) {
-      logger28.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger29.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
   return router;
 }
-var logger28;
+var logger29;
 var init_entities = __esm({
   "packages/server/dist/routes/entities.js"() {
     "use strict";
     init_dist();
-    logger28 = createLogger("server:entities");
+    logger29 = createLogger("server:entities");
   }
 });
 
@@ -8319,7 +8438,7 @@ function createRelationshipRoutes(bundle) {
         meta: { message: "Provide sourceId or targetId to query relationships" }
       });
     } catch (err) {
-      logger29.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger30.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
@@ -8332,18 +8451,18 @@ function createRelationshipRoutes(bundle) {
       }
       res.json({ success: true, data: rel });
     } catch (err) {
-      logger29.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger30.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
   return router;
 }
-var logger29;
+var logger30;
 var init_relationships = __esm({
   "packages/server/dist/routes/relationships.js"() {
     "use strict";
     init_dist();
-    logger29 = createLogger("server:relationships");
+    logger30 = createLogger("server:relationships");
   }
 });
 
@@ -8357,7 +8476,7 @@ function createProjectRoutes(bundle) {
       const projects = await store.listProjects();
       res.json({ success: true, data: projects });
     } catch (err) {
-      logger30.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger31.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
@@ -8370,18 +8489,18 @@ function createProjectRoutes(bundle) {
       }
       res.json({ success: true, data: project });
     } catch (err) {
-      logger30.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger31.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
   return router;
 }
-var logger30;
+var logger31;
 var init_projects = __esm({
   "packages/server/dist/routes/projects.js"() {
     "use strict";
     init_dist();
-    logger30 = createLogger("server:projects");
+    logger31 = createLogger("server:projects");
   }
 });
 
@@ -8454,7 +8573,7 @@ function createQueryRoutes(bundle) {
         }
       });
     } catch (err) {
-      logger31.error("Query failed", { error: err instanceof Error ? err.message : String(err) });
+      logger32.error("Query failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "QUERY_FAILED", message: "Query processing failed" } });
     }
   });
@@ -8474,12 +8593,12 @@ ${entityContext || "No relevant entities found."}
 - If the context doesn't contain enough information, say so
 - Suggest follow-up questions the user might ask`;
 }
-var logger31;
+var logger32;
 var init_query = __esm({
   "packages/server/dist/routes/query.js"() {
     "use strict";
     init_dist();
-    logger31 = createLogger("server:query");
+    logger32 = createLogger("server:query");
   }
 });
 
@@ -8508,7 +8627,7 @@ function createContradictionRoutes(bundle) {
       }));
       res.json({ success: true, data: enriched, meta: { total: enriched.length } });
     } catch (err) {
-      logger32.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger33.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
@@ -8530,25 +8649,25 @@ function createContradictionRoutes(bundle) {
       });
       res.json({ success: true, data: { id: req.params.id, status: "resolved", action } });
     } catch (err) {
-      logger32.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger33.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
   return router;
 }
-var logger32;
+var logger33;
 var init_contradictions = __esm({
   "packages/server/dist/routes/contradictions.js"() {
     "use strict";
     init_dist();
-    logger32 = createLogger("server:contradictions");
+    logger33 = createLogger("server:contradictions");
   }
 });
 
 // packages/server/dist/routes/status.js
 import { Router as Router7 } from "express";
 import { readFileSync as readFileSync10 } from "node:fs";
-import { resolve as resolve20, dirname as dirname4 } from "node:path";
+import { resolve as resolve21, dirname as dirname4 } from "node:path";
 import { fileURLToPath } from "node:url";
 function createStatusRoutes(bundle) {
   const router = Router7();
@@ -8577,7 +8696,7 @@ function createStatusRoutes(bundle) {
         }
       });
     } catch (err) {
-      logger33.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger34.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
@@ -8591,7 +8710,7 @@ function createStatusRoutes(bundle) {
       });
       res.json({ success: true, data });
     } catch (err) {
-      logger33.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger34.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
@@ -8600,31 +8719,31 @@ function createStatusRoutes(bundle) {
       const data = store.getReportData();
       res.json({ success: true, data });
     } catch (err) {
-      logger33.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
+      logger34.error("Request failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(500).json({ success: false, error: { code: "SERVER_ERROR", message: "Internal server error" } });
     }
   });
   return router;
 }
-var logger33, _version;
+var logger34, _version;
 var init_status = __esm({
   "packages/server/dist/routes/status.js"() {
     "use strict";
     init_dist();
-    logger33 = createLogger("server:status");
+    logger34 = createLogger("server:status");
     _version = "unknown";
     try {
       let dir = typeof __dirname !== "undefined" ? __dirname : dirname4(fileURLToPath(import.meta.url));
       for (let i = 0; i < 6; i++) {
         try {
-          const pkg = JSON.parse(readFileSync10(resolve20(dir, "package.json"), "utf-8"));
+          const pkg = JSON.parse(readFileSync10(resolve21(dir, "package.json"), "utf-8"));
           if ((pkg.name === "@gzoo/cortex" || pkg.name === "gzoo-cortex") && pkg.version) {
             _version = pkg.version;
             break;
           }
         } catch {
         }
-        dir = resolve20(dir, "..");
+        dir = resolve21(dir, "..");
       }
     } catch {
     }
@@ -8653,7 +8772,7 @@ function createAuthMiddleware(options) {
     return (_req, _res, next) => next();
   }
   if (!token) {
-    logger34.error("Auth is required but no token configured. All API requests will be rejected.");
+    logger35.error("Auth is required but no token configured. All API requests will be rejected.");
     return (_req, res, _next) => {
       res.status(500).json({
         success: false,
@@ -8664,7 +8783,7 @@ function createAuthMiddleware(options) {
       });
     };
   }
-  logger34.info("API authentication enabled");
+  logger35.info("API authentication enabled");
   return (req, res, next) => {
     const authHeader = req.headers.authorization;
     if (!authHeader) {
@@ -8729,12 +8848,12 @@ function validateWsToken(config9, host, url, authHeader) {
     return false;
   }
 }
-var logger34, LOCALHOST_HOSTS;
+var logger35, LOCALHOST_HOSTS;
 var init_auth = __esm({
   "packages/server/dist/middleware/auth.js"() {
     "use strict";
     init_dist();
-    logger34 = createLogger("server:auth");
+    logger35 = createLogger("server:auth");
     LOCALHOST_HOSTS = /* @__PURE__ */ new Set(["127.0.0.1", "localhost", "::1"]);
   }
 });
@@ -8747,19 +8866,19 @@ function createEventRelay(server, config9, host) {
   wss.on("connection", (ws, req) => {
     if (config9 && host && !validateWsToken(config9, host, req.url, req.headers.authorization)) {
       ws.close(4401, "Authentication required");
-      logger35.warn("WebSocket connection rejected \u2014 invalid or missing token");
+      logger36.warn("WebSocket connection rejected \u2014 invalid or missing token");
       return;
     }
-    logger35.debug("WebSocket client connected");
+    logger36.debug("WebSocket client connected");
     ws.on("message", (raw) => {
       try {
         const msg = JSON.parse(raw.toString());
-        logger35.debug("WebSocket message received", { type: msg.type });
+        logger36.debug("WebSocket message received", { type: msg.type });
       } catch {
       }
     });
     ws.on("close", () => {
-      logger35.debug("WebSocket client disconnected");
+      logger36.debug("WebSocket client disconnected");
     });
   });
   for (const eventType of RELAYED_EVENTS) {
@@ -8799,16 +8918,16 @@ function createEventRelay(server, config9, host) {
       unsub();
     wss.close();
   };
-  logger35.info("Event relay initialized", { events: RELAYED_EVENTS.length });
+  logger36.info("Event relay initialized", { events: RELAYED_EVENTS.length });
   return { wss, broadcast, close };
 }
-var logger35, RELAYED_EVENTS;
+var logger36, RELAYED_EVENTS;
 var init_event_relay = __esm({
   "packages/server/dist/ws/event-relay.js"() {
     "use strict";
     init_dist();
     init_auth();
-    logger35 = createLogger("server:ws");
+    logger36 = createLogger("server:ws");
     RELAYED_EVENTS = [
       "entity.created",
       "relationship.created",
@@ -8831,11 +8950,14 @@ __export(dist_exports2, {
 import { readFileSync as readFileSync11 } from "node:fs";
 import express from "express";
 import { createServer } from "node:http";
-import { resolve as resolve21 } from "node:path";
+import { resolve as resolve22 } from "node:path";
 import cors from "cors";
 function createBundle(config9) {
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
-  const vectorStore = new VectorStore();
+  const vectorStore = new VectorStore({
+    dbPath: config9.graph.vectorDbPath,
+    dimensions: config9.llm.embeddings?.dimensions ?? 384
+  });
   const queryEngine = new QueryEngine(store, vectorStore);
   const router = new Router({ config: config9 });
   const currentMonth = (/* @__PURE__ */ new Date()).toISOString().slice(0, 7) + "-01T00:00:00.000Z";
@@ -8844,20 +8966,21 @@ function createBundle(config9) {
   router.getTracker().setPersist((record) => {
     store.insertTokenUsage(record);
   });
-  return { store, queryEngine, router };
+  return { store, queryEngine, router, vectorStore };
 }
 async function startServer(options) {
   const { config: config9, enableWatch = true } = options;
   const port = options.port ?? config9.server?.port ?? 3710;
   const host = options.host ?? config9.server?.host ?? "127.0.0.1";
   const bundle = createBundle(config9);
+  await bundle.vectorStore.initialize();
   const app = express();
   const server = createServer(app);
   try {
     const stats = await bundle.store.getStats();
     const projects = await bundle.store.listProjects();
     if (projects.length > 0 && stats.entityCount === 0 && stats.fileCount === 0) {
-      logger36.info("Knowledge graph is empty but projects are registered. Run `cortex ingest <project>` to backfill existing files.");
+      logger37.info("Knowledge graph is empty but projects are registered. Run `cortex ingest <project>` to backfill existing files.");
       console.log("\n  Tip: Graph is empty. Run `cortex ingest` to backfill registered projects.\n");
     }
   } catch {
@@ -8870,14 +8993,14 @@ async function startServer(options) {
         return callback(null, true);
       if (corsOrigin.includes(origin))
         return callback(null, true);
-      logger36.warn("CORS rejected", { origin, allowed: corsOrigin });
+      logger37.warn("CORS rejected", { origin, allowed: corsOrigin });
       callback(new Error("CORS not allowed"));
     }
   }));
   app.use(express.json({ limit: "1mb" }));
   const isLocal = host === "127.0.0.1" || host === "localhost" || host === "::1";
   if (!isLocal && !config9.server.auth.enabled) {
-    logger36.warn("Server bound to non-localhost without auth enabled. Set server.auth.enabled=true and server.auth.token in config, or set CORTEX_SERVER_AUTH_TOKEN env var.");
+    logger37.warn("Server bound to non-localhost without auth enabled. Set server.auth.enabled=true and server.auth.token in config, or set CORTEX_SERVER_AUTH_TOKEN env var.");
   }
   const rateLimitWindow = 6e4;
   const rateLimitMax = 30;
@@ -8920,9 +9043,9 @@ async function startServer(options) {
   api.use("/", createStatusRoutes(bundle));
   app.use("/api/v1", api);
   const relay = createEventRelay(server, config9, host);
-  logger36.info("WebSocket relay attached", { path: "/ws" });
+  logger37.info("WebSocket relay attached", { path: "/ws" });
   if (options.webDistPath) {
-    const webDist = resolve21(options.webDistPath);
+    const webDist = resolve22(options.webDistPath);
     app.use(express.static(webDist, { index: false }));
     const injectAuthToken = (html) => {
       const token = config9.server.auth.token;
@@ -8941,7 +9064,7 @@ ${html}`;
     };
     const spaLimiter = rate_limit_default({ windowMs: 6e4, max: 60 });
     app.get("*", spaLimiter, (req, res) => {
-      const indexPath = resolve21(webDist, "index.html");
+      const indexPath = resolve22(webDist, "index.html");
       const authActive = config9.server.auth.enabled && !!config9.server.auth.token;
       if (authActive && validateWsToken(config9, host, req.url, req.headers.authorization)) {
         res.type("html").send(injectAuthToken(readFileSync11(indexPath, "utf-8")));
@@ -8949,11 +9072,11 @@ ${html}`;
         res.sendFile(indexPath);
       }
     });
-    logger36.info("Serving web dashboard", { path: webDist });
+    logger37.info("Serving web dashboard", { path: webDist });
   }
   if (enableWatch) {
     try {
-      const { FileWatcher: FileWatcher2, IngestionPipeline: IngestionPipeline2 } = await Promise.resolve().then(() => (init_dist3(), dist_exports));
+      const { FileWatcher: FileWatcher2, IngestionPipeline: IngestionPipeline2 } = await Promise.resolve().then(() => (init_dist4(), dist_exports));
       const projects = await bundle.store.listProjects();
       if (projects.length > 0) {
         for (const project of projects) {
@@ -8966,7 +9089,7 @@ ${html}`;
             projectPrivacyLevel: project.privacyLevel,
             mergeConfidenceThreshold: 0.85,
             secretPatterns: config9.privacy.secretPatterns
-          });
+          }, bundle.vectorStore);
           const watcher = new FileWatcher2({
             dirs: [project.rootPath],
             exclude: config9.ingest.exclude,
@@ -8983,19 +9106,19 @@ ${html}`;
             }
           });
           watcher.start();
-          logger36.info("Watching project", { name: project.name, path: project.rootPath });
+          logger37.info("Watching project", { name: project.name, path: project.rootPath });
         }
       } else {
-        logger36.warn("No projects registered \u2014 file watcher not started. Run `cortex init` first.");
+        logger37.warn("No projects registered \u2014 file watcher not started. Run `cortex init` first.");
       }
     } catch (err) {
-      logger36.warn("File watcher failed to start", {
+      logger37.warn("File watcher failed to start", {
         error: err instanceof Error ? err.message : String(err)
       });
     }
   }
   server.listen(port, host, () => {
-    logger36.info(`Cortex server running at http://${host}:${port}`);
+    logger37.info(`Cortex server running at http://${host}:${port}`);
     console.log(`
   Cortex server running at http://${host}:${port}`);
     console.log(`  API:       http://${host}:${port}/api/v1`);
@@ -9013,7 +9136,7 @@ ${html}`;
     console.log("");
   });
   const shutdown = () => {
-    logger36.info("Shutting down...");
+    logger37.info("Shutting down...");
     clearInterval(rateLimitCleanupInterval);
     relay.close();
     server.close();
@@ -9023,13 +9146,13 @@ ${html}`;
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 }
-var logger36;
+var logger37;
 var init_dist6 = __esm({
   "packages/server/dist/index.js"() {
     "use strict";
     init_dist5();
     init_dist();
-    init_dist4();
+    init_dist3();
     init_dist2();
     init_entities();
     init_relationships();
@@ -9039,7 +9162,7 @@ var init_dist6 = __esm({
     init_status();
     init_event_relay();
     init_auth();
-    logger36 = createLogger("server");
+    logger37 = createLogger("server");
   }
 });
 
@@ -9324,8 +9447,8 @@ function writeConfig(config9, globals) {
 
 // packages/cli/dist/commands/doctor.js
 init_dist();
-init_dist3();
 init_dist4();
+init_dist3();
 init_dist2();
 import { resolve as resolve4 } from "node:path";
 import { accessSync, constants, existsSync as existsSync4 } from "node:fs";
@@ -9499,9 +9622,9 @@ async function runDoctor(globals) {
 
 // packages/cli/dist/commands/watch.js
 init_dist();
-init_dist4();
-init_dist2();
 init_dist3();
+init_dist2();
+init_dist4();
 import { resolve as resolve5 } from "node:path";
 import chalk3 from "chalk";
 import ora from "ora";
@@ -9709,9 +9832,9 @@ async function runWatch(projectName, opts, globals) {
 
 // packages/cli/dist/commands/query.js
 init_dist();
-init_dist4();
-init_dist4();
-init_dist4();
+init_dist3();
+init_dist3();
+init_dist3();
 init_dist2();
 import { resolve as resolve6 } from "node:path";
 import chalk4 from "chalk";
@@ -9725,7 +9848,10 @@ function registerQueryCommand(program2) {
 async function runQuery(question, opts, globals) {
   const config9 = loadConfig({ configDir: globals.config ? resolve6(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
-  const vectorStore = new VectorStore({ dbPath: config9.graph.vectorDbPath });
+  const vectorStore = new VectorStore({
+    dbPath: config9.graph.vectorDbPath,
+    dimensions: config9.llm.embeddings?.dimensions ?? 384
+  });
   await vectorStore.initialize();
   const queryEngine = new QueryEngine(store, vectorStore, { maxContextTokens: config9.llm.maxContextTokens });
   const router = new Router({ config: config9 });
@@ -9739,7 +9865,15 @@ async function runQuery(question, opts, globals) {
     projects.length > 0 ? `Projects: ${projects.map((p) => `${p.name} (${p.rootPath})`).join(", ")}` : "No projects configured.",
     projects.some((p) => p.lastIngestedAt) ? `Last ingested: ${projects.map((p) => p.lastIngestedAt).filter(Boolean).sort().pop()}` : ""
   ].filter(Boolean).join("\n");
-  const context = await queryEngine.assembleContext(question, void 0, opts.project);
+  let queryEmbedding;
+  if (router.hasEmbeddings()) {
+    try {
+      [queryEmbedding] = await router.embed([question]);
+    } catch {
+      queryEmbedding = void 0;
+    }
+  }
+  const context = await queryEngine.assembleContext(question, queryEmbedding, opts.project);
   if (opts.raw) {
     console.log(chalk4.dim(`Context: ${context.entities.length} entities, ${context.relationships.length} rels, ~${context.totalTokensEstimate} tokens
 `));
@@ -9841,7 +9975,7 @@ async function showFollowUps(router, question, answer, globals) {
 
 // packages/cli/dist/commands/find.js
 init_dist();
-init_dist4();
+init_dist3();
 import { resolve as resolve7 } from "node:path";
 import chalk5 from "chalk";
 var logger16 = createLogger("cli:find");
@@ -9960,7 +10094,7 @@ function displayRelationship(rel, direction, targetName, targetType) {
 
 // packages/cli/dist/commands/status.js
 init_dist();
-init_dist4();
+init_dist3();
 init_dist2();
 import { resolve as resolve8 } from "node:path";
 import { statSync as statSync3, readFileSync as readFileSync5, existsSync as existsSync5 } from "node:fs";
@@ -10224,7 +10358,7 @@ async function runStatus(globals) {
 
 // packages/cli/dist/commands/costs.js
 init_dist();
-init_dist4();
+init_dist3();
 import { resolve as resolve9 } from "node:path";
 import chalk7 from "chalk";
 var logger18 = createLogger("cli:costs");
@@ -10867,7 +11001,7 @@ async function runPrivacyLog(lastN, globals) {
 
 // packages/cli/dist/commands/contradictions.js
 init_dist();
-init_dist4();
+init_dist3();
 import { resolve as resolve12 } from "node:path";
 import chalk10 from "chalk";
 var logger21 = createLogger("cli:contradictions");
@@ -10932,7 +11066,7 @@ async function getContradictions(store, includeResolved, severity) {
 
 // packages/cli/dist/commands/resolve.js
 init_dist();
-init_dist4();
+init_dist3();
 import { resolve as resolve13 } from "node:path";
 import chalk11 from "chalk";
 var logger22 = createLogger("cli:resolve");
@@ -11042,7 +11176,7 @@ async function findContradiction(store, id) {
 
 // packages/cli/dist/commands/projects.js
 init_dist();
-init_dist4();
+init_dist3();
 import { resolve as resolve14, join as join4 } from "node:path";
 import { existsSync as existsSync6 } from "node:fs";
 import chalk12 from "chalk";
@@ -11198,9 +11332,9 @@ async function runShow(name, globals) {
 
 // packages/cli/dist/commands/ingest.js
 init_dist();
-init_dist4();
-init_dist2();
 init_dist3();
+init_dist2();
+init_dist4();
 import { resolve as resolve15, isAbsolute, extname as extname3, join as join5, relative as relative2 } from "node:path";
 import { existsSync as existsSync7, readFileSync as readFileSync8, readdirSync, statSync as statSync4 } from "node:fs";
 import { createHash as createHash3 } from "node:crypto";
@@ -11465,6 +11599,11 @@ Dry run complete: ~${totalSections * 3} entities estimated across ${filePaths.le
       entityCount: 0
     });
   }
+  const vectorStore = new VectorStore({
+    dbPath: config9.graph.vectorDbPath,
+    dimensions: config9.llm.embeddings?.dimensions ?? 384
+  });
+  await vectorStore.initialize();
   const pipeline = new IngestionPipeline(router, store, {
     projectId: project.id,
     projectName: project.name,
@@ -11474,7 +11613,7 @@ Dry run complete: ~${totalSections * 3} entities estimated across ${filePaths.le
     projectPrivacyLevel: project.privacyLevel,
     mergeConfidenceThreshold: config9.graph.mergeConfidenceThreshold,
     secretPatterns: config9.privacy.secretPatterns
-  });
+  }, vectorStore);
   let totalEntities = 0;
   let totalRelationships = 0;
   let errorCount = 0;
@@ -11547,13 +11686,120 @@ Dry run complete: ~${totalSections * 3} entities estimated across ${filePaths.le
   process.exit(errorCount > 0 ? 1 : 0);
 }
 
+// packages/cli/dist/commands/reindex.js
+init_dist();
+init_dist3();
+init_dist2();
+import { resolve as resolve16 } from "node:path";
+import chalk14 from "chalk";
+var logger25 = createLogger("cli:reindex");
+function registerReindexCommand(program2) {
+  program2.command("reindex [project]").description("Rebuild the semantic (embedding) search index for already-ingested entities").option("--project <name>", "Only reindex a specific project (same as the positional argument)").option("--yes", "Skip the confirmation prompt", false).option("--batch <n>", "Embedding batch size", "32").action(async (projectArg, opts) => {
+    const globals = program2.opts();
+    await runReindex(projectArg, opts, globals);
+  });
+}
+async function runReindex(projectArg, opts, globals) {
+  const config9 = loadConfig({ configDir: globals.config ? resolve16(globals.config) : void 0 });
+  const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
+  const router = new Router({ config: config9 });
+  wireTokenPersistence(router, store);
+  if (!router.hasEmbeddings()) {
+    console.error(chalk14.red("Semantic search is not enabled \u2014 no embedding provider configured."));
+    console.log(chalk14.dim("Enable a cloud embeddings provider, e.g. OpenAI:"));
+    console.log(chalk14.dim("  cortex config set llm.embeddings.enabled true"));
+    console.log(chalk14.dim("  cortex config set llm.embeddings.baseUrl https://api.openai.com/v1"));
+    console.log(chalk14.dim("  cortex config set llm.embeddings.model text-embedding-3-small"));
+    console.log(chalk14.dim("  cortex config set llm.embeddings.apiKeySource env:OPENAI_API_KEY"));
+    console.log(chalk14.dim("  # then add OPENAI_API_KEY=... to ~/.cortex/.env"));
+    store.close();
+    process.exit(1);
+  }
+  const name = projectArg ?? opts.project;
+  let projectId;
+  let projectLabel = "all projects";
+  if (name) {
+    const projects = await store.listProjects();
+    const proj = projects.find((p) => p.name === name);
+    if (!proj) {
+      console.error(chalk14.red(`Project "${name}" is not registered.`));
+      console.log(chalk14.dim("See registered projects with: cortex projects list"));
+      store.close();
+      process.exit(1);
+    }
+    projectId = proj.id;
+    projectLabel = proj.name;
+  }
+  const dimensions = router.embeddingDimensions();
+  const vectorStore = new VectorStore({ dbPath: config9.graph.vectorDbPath, dimensions });
+  await vectorStore.initialize();
+  const entities = await store.findEntities(projectId ? { projectId, limit: 1e6 } : { limit: 1e6 });
+  if (entities.length === 0) {
+    console.log(chalk14.yellow("No entities to index. Ingest some files first with `cortex ingest` or `cortex serve`."));
+    store.close();
+    return;
+  }
+  const model = config9.llm.embeddings?.model ?? "embedding model";
+  if (!opts.yes && !globals.json && process.stdin.isTTY) {
+    console.log(`About to (re)embed ${chalk14.bold(entities.length)} entities for ${chalk14.bold(projectLabel)} via ${chalk14.bold(model)}.`);
+    process.stdout.write(chalk14.bold("Proceed? [y/N] "));
+    const answer = await new Promise((res) => {
+      process.stdin.setEncoding("utf-8");
+      process.stdin.once("data", (d) => res(d.toString().trim().toLowerCase()));
+      setTimeout(() => res(""), 3e4);
+    });
+    if (answer !== "y" && answer !== "yes") {
+      console.log(chalk14.dim("Aborted."));
+      store.close();
+      process.exit(0);
+    }
+  }
+  if (projectId) {
+    for (const e of entities)
+      await vectorStore.deleteByEntityId(e.id);
+  } else {
+    await vectorStore.clear();
+  }
+  const batchSize = Math.max(1, Number.parseInt(opts.batch, 10) || 32);
+  let done = 0;
+  let failed = 0;
+  for (let i = 0; i < entities.length; i += batchSize) {
+    const batch = entities.slice(i, i + batchSize);
+    const texts = batch.map((e) => entityEmbeddingText(e));
+    try {
+      const vectors = await router.embed(texts);
+      await vectorStore.addVectors(batch.map((e, j) => ({ entityId: e.id, vector: vectors[j], text: texts[j] })));
+      done += batch.length;
+    } catch (err) {
+      failed += batch.length;
+      logger25.warn("reindex batch failed", {
+        at: i,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+    if (!globals.quiet && !globals.json) {
+      process.stdout.write(`\r  embedded ${done}/${entities.length}${failed ? ` (${failed} failed)` : ""}   `);
+    }
+  }
+  if (!globals.quiet && !globals.json)
+    process.stdout.write("\n");
+  const total = await vectorStore.count();
+  if (globals.json) {
+    console.log(JSON.stringify({ reindexed: done, failed, vectorRows: total, project: projectLabel }));
+  } else {
+    console.log(chalk14.green(`Reindexed ${done} entities`) + chalk14.dim(` \u2014 ${total} vectors total${failed ? `, ${failed} failed` : ""}`));
+  }
+  store.close();
+  process.exit(failed > 0 ? 1 : 0);
+}
+
 // packages/cli/dist/commands/models.js
 init_dist();
 init_dist2();
-import { resolve as resolve16 } from "node:path";
+import { resolve as resolve17 } from "node:path";
 import { spawnSync } from "node:child_process";
-import chalk14 from "chalk";
-var logger25 = createLogger("cli:models");
+import chalk15 from "chalk";
+var logger26 = createLogger("cli:models");
 function registerModelsCommand(program2) {
   const models = program2.command("models").description("Manage Ollama models");
   models.command("list").description("Show available Ollama models and which are configured").action(async () => {
@@ -11581,12 +11827,12 @@ function formatBytes2(bytes) {
   return `${mb.toFixed(0)} MB`;
 }
 async function runModelsList(globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve16(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve17(globals.config) : void 0 });
   const router = new Router({ config: config9 });
   const local = router.getLocalProvider();
   if (!local) {
-    console.log(chalk14.yellow("Local provider (Ollama) is not configured in this mode."));
-    console.log(chalk14.dim(`Current mode: ${router.getMode()} \u2014 set mode to hybrid, local-first, or local-only`));
+    console.log(chalk15.yellow("Local provider (Ollama) is not configured in this mode."));
+    console.log(chalk15.dim(`Current mode: ${router.getMode()} \u2014 set mode to hybrid, local-first, or local-only`));
     return;
   }
   const host = local.getHost();
@@ -11594,8 +11840,8 @@ async function runModelsList(globals) {
   const configuredEmbed = local.getEmbeddingModel();
   const available = await local.isAvailable();
   if (!available) {
-    console.error(chalk14.red(`\u2717 Ollama not reachable at ${host}`));
-    console.log(chalk14.dim("  Start with: ollama serve"));
+    console.error(chalk15.red(`\u2717 Ollama not reachable at ${host}`));
+    console.log(chalk15.dim("  Start with: ollama serve"));
     process.exit(1);
   }
   const modelList = await local.listModels();
@@ -11609,56 +11855,56 @@ async function runModelsList(globals) {
     return;
   }
   console.log("");
-  console.log(chalk14.bold(`Ollama Models (${host})`));
-  console.log(chalk14.dim("\u2500".repeat(50)));
+  console.log(chalk15.bold(`Ollama Models (${host})`));
+  console.log(chalk15.dim("\u2500".repeat(50)));
   if (modelList.length === 0) {
-    console.log(chalk14.dim("  No models installed."));
-    console.log(chalk14.dim("  Pull one with: cortex models pull mistral:7b-instruct-q5_K_M"));
+    console.log(chalk15.dim("  No models installed."));
+    console.log(chalk15.dim("  Pull one with: cortex models pull mistral:7b-instruct-q5_K_M"));
   } else {
     for (const m of modelList) {
       const isConfigured = m.name === configuredModel;
       const isEmbed = m.name === configuredEmbed;
-      const tag = isConfigured ? chalk14.green("\u2190 configured (primary)") : isEmbed ? chalk14.cyan("\u2190 configured (embeddings)") : "";
-      const sizeStr = chalk14.dim(formatBytes2(m.sizeBytes).padEnd(8));
+      const tag = isConfigured ? chalk15.green("\u2190 configured (primary)") : isEmbed ? chalk15.cyan("\u2190 configured (embeddings)") : "";
+      const sizeStr = chalk15.dim(formatBytes2(m.sizeBytes).padEnd(8));
       console.log(`  ${m.name.padEnd(40)} ${sizeStr} ${tag}`);
     }
   }
   console.log("");
-  console.log(chalk14.dim(`Tip: Set model with \`cortex config set llm.local.model <model>\``));
+  console.log(chalk15.dim(`Tip: Set model with \`cortex config set llm.local.model <model>\``));
   console.log("");
 }
 async function runModelsPull(model, globals) {
   if (!globals.quiet) {
-    console.log(chalk14.bold(`
-Pulling model: ${chalk14.cyan(model)}`));
-    console.log(chalk14.dim("This may take several minutes for large models...\n"));
+    console.log(chalk15.bold(`
+Pulling model: ${chalk15.cyan(model)}`));
+    console.log(chalk15.dim("This may take several minutes for large models...\n"));
   }
   const result = spawnSync("ollama", ["pull", model], { stdio: "inherit" });
   if (result.status !== 0) {
-    console.error(chalk14.red(`
+    console.error(chalk15.red(`
 \u2717 Failed to pull model "${model}"`));
-    console.log(chalk14.dim("  Make sure Ollama is running: ollama serve"));
+    console.log(chalk15.dim("  Make sure Ollama is running: ollama serve"));
     process.exit(result.status ?? 1);
   }
   if (!globals.quiet) {
-    console.log(chalk14.green(`
+    console.log(chalk15.green(`
 \u2713 Model "${model}" pulled successfully`));
-    console.log(chalk14.dim(`  Configure it: cortex config set llm.local.model ${model}`));
+    console.log(chalk15.dim(`  Configure it: cortex config set llm.local.model ${model}`));
   }
 }
 async function runModelsTest(globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve16(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve17(globals.config) : void 0 });
   const router = new Router({ config: config9 });
   const local = router.getLocalProvider();
   if (!local) {
-    console.log(chalk14.yellow("Local provider (Ollama) not configured."));
+    console.log(chalk15.yellow("Local provider (Ollama) not configured."));
     process.exit(1);
   }
   const host = local.getHost();
   const model = local.getModel();
   const embedModel = local.getEmbeddingModel();
   if (!globals.quiet && !globals.json) {
-    console.log(chalk14.bold("\nTesting Ollama setup...\n"));
+    console.log(chalk15.bold("\nTesting Ollama setup...\n"));
   }
   const checks = [];
   let reachable = false;
@@ -11689,7 +11935,7 @@ async function runModelsTest(globals) {
       inferenceTokens = result.outputTokens;
       inferenceOk = true;
     } catch (err) {
-      logger25.debug("Inference test failed", { error: err instanceof Error ? err.message : String(err) });
+      logger26.debug("Inference test failed", { error: err instanceof Error ? err.message : String(err) });
     }
   }
   const tokPerSec = inferenceMs > 0 ? Math.round(inferenceTokens / inferenceMs * 1e3) : 0;
@@ -11709,7 +11955,7 @@ async function runModelsTest(globals) {
       embedDims = embeddings[0]?.length ?? 0;
       embedOk = embedDims > 0;
     } catch (err) {
-      logger25.debug("Embedding test failed", { error: err instanceof Error ? err.message : String(err) });
+      logger26.debug("Embedding test failed", { error: err instanceof Error ? err.message : String(err) });
     }
   }
   checks.push({
@@ -11723,24 +11969,24 @@ async function runModelsTest(globals) {
     process.exit(allOk ? 0 : 4);
   }
   for (const c of checks) {
-    const icon = c.ok ? chalk14.green("\u2713") : chalk14.red("\u2717");
-    const detail = c.detail ? chalk14.dim(` (${c.detail})`) : "";
+    const icon = c.ok ? chalk15.green("\u2713") : chalk15.red("\u2717");
+    const detail = c.detail ? chalk15.dim(` (${c.detail})`) : "";
     console.log(`  ${icon} ${c.label}${detail}`);
   }
   if (allOk) {
-    console.log(chalk14.green("\n  \u2713 Ready for hybrid/local mode\n"));
+    console.log(chalk15.green("\n  \u2713 Ready for hybrid/local mode\n"));
     process.exit(0);
   } else {
-    console.log(chalk14.red("\n  \u2717 Setup incomplete \u2014 check Ollama installation\n"));
+    console.log(chalk15.red("\n  \u2717 Setup incomplete \u2014 check Ollama installation\n"));
     process.exit(4);
   }
 }
 async function runModelsInfo(globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve16(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve17(globals.config) : void 0 });
   const router = new Router({ config: config9 });
   const local = router.getLocalProvider();
   if (!local) {
-    console.log(chalk14.yellow("Local provider (Ollama) not configured."));
+    console.log(chalk15.yellow("Local provider (Ollama) not configured."));
     process.exit(1);
   }
   const model = local.getModel();
@@ -11758,9 +12004,9 @@ async function runModelsInfo(globals) {
     return;
   }
   console.log("");
-  console.log(chalk14.bold(`Ollama Model Info`));
-  console.log(chalk14.dim("\u2500".repeat(40)));
-  console.log(`  Model:      ${chalk14.cyan(model)}`);
+  console.log(chalk15.bold(`Ollama Model Info`));
+  console.log(chalk15.dim("\u2500".repeat(40)));
+  console.log(`  Model:      ${chalk15.cyan(model)}`);
   console.log(`  Host:       ${host}`);
   console.log(`  Context:    ${numCtx.toLocaleString()} tokens`);
   console.log(`  GPU layers: ${numGpu === -1 ? "auto-detect" : String(numGpu)}`);
@@ -11770,14 +12016,14 @@ async function runModelsInfo(globals) {
 
 // packages/cli/dist/commands/mcp.js
 import { spawn } from "node:child_process";
-import { resolve as resolve17, dirname as dirname3 } from "node:path";
+import { resolve as resolve18, dirname as dirname3 } from "node:path";
 import { existsSync as existsSync8, readFileSync as readFileSync9 } from "node:fs";
-import chalk15 from "chalk";
+import chalk16 from "chalk";
 function findPackageRoot(startDir) {
   let dir = startDir;
   for (let i = 0; i < 10; i++) {
     try {
-      const pkgPath = resolve17(dir, "package.json");
+      const pkgPath = resolve18(dir, "package.json");
       const pkg = JSON.parse(readFileSync9(pkgPath, "utf-8"));
       if (pkg.name === "@gzoo/cortex" || pkg.name === "gzoo-cortex")
         return dir;
@@ -11794,27 +12040,27 @@ function registerMcpCommand(program2) {
   program2.command("mcp").description("Start the Cortex MCP server (stdio transport for Claude Code)").option("--config-dir <path>", "Directory containing cortex.config.json").action(async (opts) => {
     const globals = program2.opts();
     const pkgRoot = findPackageRoot(import.meta.dirname);
-    const bundledMcp = resolve17(pkgRoot, "dist/cortex-mcp.mjs");
-    const workspaceMcp = resolve17(pkgRoot, "packages/mcp/dist/index.js");
+    const bundledMcp = resolve18(pkgRoot, "dist/cortex-mcp.mjs");
+    const workspaceMcp = resolve18(pkgRoot, "packages/mcp/dist/index.js");
     const mcpEntry = existsSync8(bundledMcp) ? bundledMcp : workspaceMcp;
     if (!existsSync8(mcpEntry)) {
-      console.error(chalk15.red("Error: MCP server not built."));
-      console.error(chalk15.dim(`Expected: ${mcpEntry}`));
-      console.error(chalk15.dim("Run npm run build first."));
+      console.error(chalk16.red("Error: MCP server not built."));
+      console.error(chalk16.dim(`Expected: ${mcpEntry}`));
+      console.error(chalk16.dim("Run npm run build first."));
       process.exit(1);
     }
     if (process.stdout.isTTY) {
-      process.stderr.write(chalk15.yellow("\n[cortex mcp] Starting MCP server on stdio.\n") + chalk15.dim("This process blocks. It is meant to be launched by Claude Code, not run manually.\n") + chalk15.dim("Register with: claude mcp add cortex --scope user -- node " + mcpEntry + "\n\n"));
+      process.stderr.write(chalk16.yellow("\n[cortex mcp] Starting MCP server on stdio.\n") + chalk16.dim("This process blocks. It is meant to be launched by Claude Code, not run manually.\n") + chalk16.dim("Register with: claude mcp add cortex --scope user -- node " + mcpEntry + "\n\n"));
     }
     const env = {
       ...process.env,
       CORTEX_LOG_LEVEL: "error"
     };
     if (opts.configDir) {
-      env["CORTEX_CONFIG_DIR"] = resolve17(opts.configDir);
+      env["CORTEX_CONFIG_DIR"] = resolve18(opts.configDir);
     }
     if (globals.config) {
-      env["CORTEX_CONFIG_DIR"] = resolve17(globals.config);
+      env["CORTEX_CONFIG_DIR"] = resolve18(globals.config);
     }
     const child = spawn(process.execPath, [mcpEntry], {
       stdio: "inherit",
@@ -11831,10 +12077,10 @@ function registerMcpCommand(program2) {
 
 // packages/cli/dist/commands/db.js
 init_dist();
-init_dist4();
-import { resolve as resolve18 } from "node:path";
-import chalk16 from "chalk";
-var logger26 = createLogger("cli:db");
+init_dist3();
+import { resolve as resolve19 } from "node:path";
+import chalk17 from "chalk";
+var logger27 = createLogger("cli:db");
 function registerDbCommand(program2) {
   const dbCmd = program2.command("db").description("Database maintenance");
   dbCmd.command("clean <path>").description("Hard-delete all entities, relationships, and files under a source path").option("--force", "Skip confirmation prompt").action(async (sourcePath, opts) => {
@@ -11855,14 +12101,14 @@ async function confirm(message, force) {
     return true;
   const { createInterface } = await import("node:readline");
   const rl = createInterface({ input: process.stdin, output: process.stderr });
-  const answer = await new Promise((resolve25) => {
-    rl.question(chalk16.yellow(message + " [y/N] "), resolve25);
+  const answer = await new Promise((resolve26) => {
+    rl.question(chalk17.yellow(message + " [y/N] "), resolve26);
   });
   rl.close();
   return answer.toLowerCase() === "y";
 }
 async function runDbClean(sourcePath, force, globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve18(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve19(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   try {
     const ok = await confirm(`Hard-delete all entities, relationships, and file records under "${sourcePath}"?`, force);
@@ -11874,19 +12120,19 @@ async function runDbClean(sourcePath, force, globals) {
     if (globals.json) {
       console.log(JSON.stringify(result));
     } else if (result.deletedEntities === 0) {
-      console.log(chalk16.yellow(`No entities found matching path: ${sourcePath}`));
+      console.log(chalk17.yellow(`No entities found matching path: ${sourcePath}`));
     } else {
-      console.log(chalk16.green(`\u2713 Deleted ${result.deletedEntities} entities, ${result.deletedRelationships} relationships, ${result.deletedFiles} file records`));
+      console.log(chalk17.green(`\u2713 Deleted ${result.deletedEntities} entities, ${result.deletedRelationships} relationships, ${result.deletedFiles} file records`));
     }
   } catch (err) {
-    logger26.error("db clean failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk16.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger27.error("db clean failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk17.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   } finally {
     store.close();
   }
 }
 async function runDbReset(force, globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve18(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve19(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   try {
     const stats = await store.getStats();
@@ -11894,7 +12140,7 @@ async function runDbReset(force, globals) {
       if (globals.json) {
         console.log(JSON.stringify({ reset: true, message: "Database was already empty" }));
       } else {
-        console.log(chalk16.dim("Database is already empty."));
+        console.log(chalk17.dim("Database is already empty."));
       }
       return;
     }
@@ -11907,17 +12153,17 @@ async function runDbReset(force, globals) {
     if (globals.json) {
       console.log(JSON.stringify({ reset: true }));
     } else {
-      console.log(chalk16.green("\u2713 Database reset. All entities, relationships, and files removed. Projects preserved."));
+      console.log(chalk17.green("\u2713 Database reset. All entities, relationships, and files removed. Projects preserved."));
     }
   } catch (err) {
-    logger26.error("db reset failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk16.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger27.error("db reset failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk17.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   } finally {
     store.close();
   }
 }
 async function runDbPrune(force, globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve18(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve19(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   try {
     const ok = await confirm("Remove all soft-deleted entities and their relationships?", force);
@@ -11930,14 +12176,14 @@ async function runDbPrune(force, globals) {
       console.log(JSON.stringify(result));
     } else {
       if (result.deletedEntities === 0) {
-        console.log(chalk16.dim("Nothing to prune \u2014 no soft-deleted entities found."));
+        console.log(chalk17.dim("Nothing to prune \u2014 no soft-deleted entities found."));
       } else {
-        console.log(chalk16.green(`\u2713 Pruned ${result.deletedEntities} entities and ${result.deletedRelationships} relationships`));
+        console.log(chalk17.green(`\u2713 Pruned ${result.deletedEntities} entities and ${result.deletedRelationships} relationships`));
       }
     }
   } catch (err) {
-    logger26.error("db prune failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk16.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger27.error("db prune failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk17.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   } finally {
     store.close();
   }
@@ -11945,10 +12191,10 @@ async function runDbPrune(force, globals) {
 
 // packages/cli/dist/commands/report.js
 init_dist();
-init_dist4();
-import { resolve as resolve19 } from "node:path";
-import chalk17 from "chalk";
-var logger27 = createLogger("cli:report");
+init_dist3();
+import { resolve as resolve20 } from "node:path";
+import chalk18 from "chalk";
+var logger28 = createLogger("cli:report");
 function registerReportCommand(program2) {
   program2.command("report").description("Post-ingestion summary \u2014 files, entities, relationships, contradictions, token costs").option("--failed", "Show full list of failed files with error messages", false).action(async (opts) => {
     const globals = program2.opts();
@@ -11956,7 +12202,7 @@ function registerReportCommand(program2) {
   });
 }
 async function runReport(opts, globals) {
-  const config9 = loadConfig({ configDir: globals.config ? resolve19(globals.config) : void 0 });
+  const config9 = loadConfig({ configDir: globals.config ? resolve20(globals.config) : void 0 });
   const store = new SQLiteStore({ dbPath: config9.graph.dbPath, backupOnStartup: false });
   try {
     const data = store.getReportData();
@@ -11966,30 +12212,30 @@ async function runReport(opts, globals) {
       return;
     }
     console.log("");
-    console.log(chalk17.bold.cyan("CORTEX REPORT"));
-    console.log(chalk17.dim(`Generated: ${new Date(data.generatedAt).toLocaleString()}`));
-    console.log(chalk17.dim("\u2500".repeat(60)));
+    console.log(chalk18.bold.cyan("CORTEX REPORT"));
+    console.log(chalk18.dim(`Generated: ${new Date(data.generatedAt).toLocaleString()}`));
+    console.log(chalk18.dim("\u2500".repeat(60)));
     const totalFiles = data.fileStatus.ingested + data.fileStatus.failed + data.fileStatus.skipped + data.fileStatus.pending;
     console.log("");
-    console.log(chalk17.bold("Files"));
-    console.log(`  ${chalk17.green("\u2713")} Ingested  ${String(data.fileStatus.ingested).padStart(5)}   ${chalk17.red("\u2717")} Failed    ${String(data.fileStatus.failed).padStart(5)}   ${chalk17.dim("\u2013")} Skipped   ${String(data.fileStatus.skipped).padStart(5)}   Total ${totalFiles}`);
+    console.log(chalk18.bold("Files"));
+    console.log(`  ${chalk18.green("\u2713")} Ingested  ${String(data.fileStatus.ingested).padStart(5)}   ${chalk18.red("\u2717")} Failed    ${String(data.fileStatus.failed).padStart(5)}   ${chalk18.dim("\u2013")} Skipped   ${String(data.fileStatus.skipped).padStart(5)}   Total ${totalFiles}`);
     if (data.failedFiles.length > 0) {
       if (opts.failed || data.failedFiles.length <= 5) {
         console.log("");
-        console.log(chalk17.dim("  Failed files:"));
+        console.log(chalk18.dim("  Failed files:"));
         for (const f of data.failedFiles) {
-          console.log(chalk17.red(`    \u2717 ${f.relativePath}`));
-          console.log(chalk17.dim(`      ${f.parseError}`));
+          console.log(chalk18.red(`    \u2717 ${f.relativePath}`));
+          console.log(chalk18.dim(`      ${f.parseError}`));
         }
       } else {
-        console.log(chalk17.dim(`  (${data.failedFiles.length} failed \u2014 run with --failed to see details)`));
+        console.log(chalk18.dim(`  (${data.failedFiles.length} failed \u2014 run with --failed to see details)`));
       }
     }
     const totalEntities = data.entityBreakdown.reduce((s, r) => s + r.count, 0);
     console.log("");
-    console.log(chalk17.bold(`Entities  (${totalEntities} active)`));
+    console.log(chalk18.bold(`Entities  (${totalEntities} active)`));
     if (data.entityBreakdown.length === 0) {
-      console.log(chalk17.dim("  None extracted yet."));
+      console.log(chalk18.dim("  None extracted yet."));
     } else {
       for (const row of data.entityBreakdown) {
         const bar = buildBar2(row.count / totalEntities, 16);
@@ -11998,13 +12244,13 @@ async function runReport(opts, globals) {
       }
     }
     if (data.supersededCount > 0) {
-      console.log(chalk17.dim(`  + ${data.supersededCount} superseded (merged duplicates)`));
+      console.log(chalk18.dim(`  + ${data.supersededCount} superseded (merged duplicates)`));
     }
     const totalRels = data.relationshipBreakdown.reduce((s, r) => s + r.count, 0);
     console.log("");
-    console.log(chalk17.bold(`Relationships  (${totalRels} total)`));
+    console.log(chalk18.bold(`Relationships  (${totalRels} total)`));
     if (data.relationshipBreakdown.length === 0) {
-      console.log(chalk17.dim("  None inferred yet."));
+      console.log(chalk18.dim("  None inferred yet."));
     } else {
       for (const row of data.relationshipBreakdown) {
         const bar = buildBar2(totalRels > 0 ? row.count / totalRels : 0, 16);
@@ -12013,43 +12259,43 @@ async function runReport(opts, globals) {
     }
     const totalContradictions = data.contradictions.active + data.contradictions.resolved + data.contradictions.dismissed;
     console.log("");
-    console.log(chalk17.bold(`Contradictions  (${totalContradictions} total)`));
+    console.log(chalk18.bold(`Contradictions  (${totalContradictions} total)`));
     if (totalContradictions === 0) {
-      console.log(chalk17.dim("  None detected."));
+      console.log(chalk18.dim("  None detected."));
     } else {
-      console.log(`  ${chalk17.red("Active")}   ${data.contradictions.active}   Resolved  ${data.contradictions.resolved}   Dismissed ${data.contradictions.dismissed}`);
+      console.log(`  ${chalk18.red("Active")}   ${data.contradictions.active}   Resolved  ${data.contradictions.resolved}   Dismissed ${data.contradictions.dismissed}`);
       if (data.contradictions.active > 0) {
-        console.log(chalk17.dim(`  Severity: ${data.contradictions.highSeverity} high / ${data.contradictions.mediumSeverity} medium / ${data.contradictions.lowSeverity} low`));
+        console.log(chalk18.dim(`  Severity: ${data.contradictions.highSeverity} high / ${data.contradictions.mediumSeverity} medium / ${data.contradictions.lowSeverity} low`));
         if (data.topContradictions.length > 0) {
           console.log("");
           for (const c of data.topContradictions) {
-            const sevColor = c.severity === "high" || c.severity === "critical" ? chalk17.red : c.severity === "medium" ? chalk17.yellow : chalk17.dim;
-            console.log(`  ${sevColor(`[${c.severity}]`)} ${chalk17.white(c.entityA)} ${chalk17.dim("\u2194")} ${chalk17.white(c.entityB)}`);
-            console.log(chalk17.dim(`         ${truncate(c.description, 100)}`));
-            console.log(chalk17.dim(`         cortex resolve ${c.id} --action <supersede|dismiss|keep-old|both-valid>`));
+            const sevColor = c.severity === "high" || c.severity === "critical" ? chalk18.red : c.severity === "medium" ? chalk18.yellow : chalk18.dim;
+            console.log(`  ${sevColor(`[${c.severity}]`)} ${chalk18.white(c.entityA)} ${chalk18.dim("\u2194")} ${chalk18.white(c.entityB)}`);
+            console.log(chalk18.dim(`         ${truncate(c.description, 100)}`));
+            console.log(chalk18.dim(`         cortex resolve ${c.id} --action <supersede|dismiss|keep-old|both-valid>`));
           }
           if (data.contradictions.active > data.topContradictions.length) {
-            console.log(chalk17.dim(`  ... and ${data.contradictions.active - data.topContradictions.length} more. Run \`cortex contradictions\` to see all.`));
+            console.log(chalk18.dim(`  ... and ${data.contradictions.active - data.topContradictions.length} more. Run \`cortex contradictions\` to see all.`));
           }
         }
       }
     }
     const { totalInput, totalOutput } = data.tokenEstimate;
     console.log("");
-    console.log(chalk17.bold("Token Usage  (from stored entity records)"));
+    console.log(chalk18.bold("Token Usage  (from stored entity records)"));
     if (totalInput === 0 && totalOutput === 0) {
-      console.log(chalk17.dim("  No token data available."));
+      console.log(chalk18.dim("  No token data available."));
     } else {
       console.log(`  Input   ${totalInput.toLocaleString().padStart(10)} tokens
   Output  ${totalOutput.toLocaleString().padStart(10)} tokens`);
     }
     console.log("");
-    console.log(chalk17.dim("\u2500".repeat(60)));
-    console.log(chalk17.dim("Tip: cortex contradictions  |  cortex costs  |  cortex status"));
+    console.log(chalk18.dim("\u2500".repeat(60)));
+    console.log(chalk18.dim("Tip: cortex contradictions  |  cortex costs  |  cortex status"));
     console.log("");
   } catch (err) {
-    logger27.error("Report failed", { error: err instanceof Error ? err.message : String(err) });
-    console.error(chalk17.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+    logger28.error("Report failed", { error: err instanceof Error ? err.message : String(err) });
+    console.error(chalk18.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
   }
   store.close();
 }
@@ -12060,12 +12306,12 @@ function truncate(str, maxLen) {
 function buildBar2(ratio, width) {
   const filled = Math.round(Math.min(1, ratio) * width);
   const empty = width - filled;
-  return chalk17.cyan("\u2588".repeat(filled)) + chalk17.dim("\u2591".repeat(empty));
+  return chalk18.cyan("\u2588".repeat(filled)) + chalk18.dim("\u2591".repeat(empty));
 }
 
 // packages/cli/dist/commands/serve.js
 init_dist();
-import { resolve as resolve22, dirname as dirname5 } from "node:path";
+import { resolve as resolve23, dirname as dirname5 } from "node:path";
 import { readFileSync as readFileSync12, writeFileSync as writeFileSync5, mkdirSync as mkdirSync6, existsSync as existsSync9, appendFileSync } from "node:fs";
 import { homedir as homedir9 } from "node:os";
 import { randomBytes } from "node:crypto";
@@ -12073,7 +12319,7 @@ function findPkgRoot(startDir) {
   let dir = startDir;
   for (let i = 0; i < 10; i++) {
     try {
-      const pkgPath = resolve22(dir, "package.json");
+      const pkgPath = resolve23(dir, "package.json");
       const pkg = JSON.parse(readFileSync12(pkgPath, "utf-8"));
       if (pkg.name === "@gzoo/cortex" || pkg.name === "gzoo-cortex")
         return dir;
@@ -12086,7 +12332,7 @@ function findPkgRoot(startDir) {
   }
   return startDir;
 }
-var logger37 = createLogger("cli:serve");
+var logger38 = createLogger("cli:serve");
 function registerServeCommand(program2) {
   program2.command("serve").description("Start the Cortex API server + web dashboard").option("--port <port>", "Port to listen on (default: 3710)", "3710").option("--host <host>", "Host to bind to (default: 127.0.0.1)", "127.0.0.1").option("--auth-token <token>", "API authentication token (enables auth)").option("--no-watch", "Disable file watcher").action(async (opts) => {
     const globals = program2.opts();
@@ -12101,8 +12347,8 @@ function ensureAuthToken(host, config9) {
   if (config9.server.auth.token)
     return;
   const token = randomBytes(32).toString("hex");
-  const envDir = resolve22(homedir9(), ".cortex");
-  const envPath = resolve22(envDir, ".env");
+  const envDir = resolve23(homedir9(), ".cortex");
+  const envPath = resolve23(envDir, ".env");
   mkdirSync6(envDir, { recursive: true });
   const line = `CORTEX_SERVER_AUTH_TOKEN=${token}`;
   if (existsSync9(envPath)) {
@@ -12126,7 +12372,7 @@ ${line}
 }
 async function runServe(opts, globals) {
   try {
-    const config9 = loadConfig({ configDir: globals.config ? resolve22(globals.config) : void 0 });
+    const config9 = loadConfig({ configDir: globals.config ? resolve23(globals.config) : void 0 });
     if (opts.authToken) {
       config9.server.auth.enabled = true;
       config9.server.auth.token = opts.authToken;
@@ -12135,7 +12381,7 @@ async function runServe(opts, globals) {
     let webDistPath;
     const pkgRoot = findPkgRoot(import.meta.dirname);
     try {
-      const webPkgPath = resolve22(pkgRoot, "packages/web/dist");
+      const webPkgPath = resolve23(pkgRoot, "packages/web/dist");
       const { existsSync: existsSync11 } = await import("node:fs");
       if (existsSync11(webPkgPath)) {
         webDistPath = webPkgPath;
@@ -12143,9 +12389,9 @@ async function runServe(opts, globals) {
     } catch {
     }
     const { startServer: startServer2 } = await Promise.resolve().then(() => (init_dist6(), dist_exports2));
-    const pidDir = resolve22(homedir9(), ".cortex");
+    const pidDir = resolve23(homedir9(), ".cortex");
     mkdirSync6(pidDir, { recursive: true });
-    writeFileSync5(resolve22(pidDir, "cortex.pid"), String(process.pid));
+    writeFileSync5(resolve23(pidDir, "cortex.pid"), String(process.pid));
     await startServer2({
       config: config9,
       port: Number(opts.port),
@@ -12154,17 +12400,17 @@ async function runServe(opts, globals) {
       webDistPath
     });
   } catch (err) {
-    logger37.error("Server failed to start", { error: err instanceof Error ? err.message : String(err) });
+    logger38.error("Server failed to start", { error: err instanceof Error ? err.message : String(err) });
     console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 }
 
 // packages/cli/dist/commands/stop.js
-import { resolve as resolve23 } from "node:path";
+import { resolve as resolve24 } from "node:path";
 import { readFileSync as readFileSync13, unlinkSync, existsSync as existsSync10 } from "node:fs";
 import { homedir as homedir10 } from "node:os";
-var PID_FILE = resolve23(homedir10(), ".cortex", "cortex.pid");
+var PID_FILE = resolve24(homedir10(), ".cortex", "cortex.pid");
 function readPid() {
   try {
     const pid = Number(readFileSync13(PID_FILE, "utf-8").trim());
@@ -12231,7 +12477,7 @@ function registerRestartCommand(program2) {
 
 // packages/cli/dist/index.js
 import { readFileSync as readFileSync14 } from "node:fs";
-import { dirname as dirname6, resolve as resolve24 } from "node:path";
+import { dirname as dirname6, resolve as resolve25 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function wireTokenPersistence(router, store) {
   const currentMonth = (/* @__PURE__ */ new Date()).toISOString().slice(0, 7) + "-01T00:00:00.000Z";
@@ -12243,16 +12489,16 @@ function wireTokenPersistence(router, store) {
 }
 function getVersion() {
   if (true)
-    return "0.7.1";
+    return "0.8.1";
   let dir = typeof __dirname !== "undefined" ? __dirname : dirname6(fileURLToPath2(import.meta.url));
   for (let i = 0; i < 6; i++) {
     try {
-      const pkg = JSON.parse(readFileSync14(resolve24(dir, "package.json"), "utf-8"));
+      const pkg = JSON.parse(readFileSync14(resolve25(dir, "package.json"), "utf-8"));
       if ((pkg.name === "@gzoo/cortex" || pkg.name === "gzoo-cortex") && pkg.version)
         return pkg.version;
     } catch {
     }
-    dir = resolve24(dir, "..");
+    dir = resolve25(dir, "..");
   }
   return "unknown";
 }
@@ -12272,6 +12518,7 @@ registerContradictionsCommand(program);
 registerResolveCommand(program);
 registerProjectsCommand(program);
 registerIngestCommand(program);
+registerReindexCommand(program);
 registerModelsCommand(program);
 registerMcpCommand(program);
 registerDbCommand(program);

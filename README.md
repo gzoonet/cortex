@@ -29,6 +29,7 @@ and gives it back to you when you need it.
 - **Infers** relationships between entities across projects
 - **Detects** contradictions when decisions conflict
 - **Queries** in natural language with source citations
+- **Searches semantically** — blends keyword and vector (embedding) similarity so queries match by meaning, not just keywords (optional; see [Semantic Search](#semantic-search-embeddings))
 - **Routes** intelligently between cloud and local LLMs
 - **Respects** privacy — restricted projects never leave your machine
 - **Web dashboard** with knowledge graph visualization, live feed, and query explorer
@@ -60,7 +61,7 @@ cd cortex
 npm install && npm run build && npm link
 ```
 
-Verify: `cortex --version` (current release: **0.7.1**)
+Verify: `cortex --version` (current release: **0.8.1**)
 
 ### 2. Setup
 
@@ -165,6 +166,8 @@ Cortex is **provider-agnostic**. It supports:
 
 Cost tracking uses provider-aware rates for DeepSeek, Gemini, Groq, and OpenRouter models — not a blanket Anthropic fallback.
 
+**Embeddings** (for semantic search) are configured as a *separate* provider — independent of your chat model — so you can run chat on DeepSeek and embeddings on OpenAI. See [Semantic Search](#semantic-search-embeddings).
+
 ### Routing Modes
 
 | Mode | Cloud Cost | Quality | Ollama Required |
@@ -206,6 +209,29 @@ cortex doctor                            # validate setup
 
 Full configuration reference: [docs/configuration.md](docs/configuration.md)
 
+### Semantic Search (Embeddings)
+
+Cortex blends keyword (full-text) search with **vector similarity**, so queries match by meaning rather than exact words. Embeddings are **optional and off by default** — enable them with a cloud embeddings provider (no local GPU or Ollama required):
+
+```bash
+cortex config set llm.embeddings.enabled true
+cortex config set llm.embeddings.baseUrl https://api.openai.com/v1
+cortex config set llm.embeddings.model text-embedding-3-small
+cortex config set llm.embeddings.apiKeySource env:OPENAI_API_KEY
+cortex config set llm.embeddings.dimensions 1536
+# then add the key to ~/.cortex/.env:
+echo 'OPENAI_API_KEY=sk-...' >> ~/.cortex/.env
+```
+
+The embeddings provider is **independent of your chat provider** — run chat on DeepSeek (or Anthropic, Groq, …) and embeddings on OpenAI. Any OpenAI-compatible embeddings endpoint works.
+
+New files are embedded automatically as they're ingested. To build the index for a graph you **already** ingested, run a one-time reindex:
+
+```bash
+cortex reindex                 # all projects
+cortex reindex my-app          # a single project
+```
+
 ## Commands
 
 | Command | Description |
@@ -216,6 +242,7 @@ Full configuration reference: [docs/configuration.md](docs/configuration.md)
 | `cortex serve` | Web dashboard + API + file watcher (port 3710) |
 | `cortex watch [project]` | CLI-only file watcher |
 | `cortex ingest <file-or-glob>` | One-shot file ingestion (separate from Live Feed) |
+| `cortex reindex [project]` | Rebuild the semantic (embedding) search index for existing entities |
 | `cortex query <question>` | Natural language query with citations |
 | `cortex find <term>` | Find entities by name |
 | `cortex status` | Graph stats, costs, provider status |

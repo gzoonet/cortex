@@ -2,6 +2,16 @@
 
 All notable changes to GZOO Cortex will be documented in this file.
 
+## [0.8.1] - 2026-06-25
+
+### Added
+
+- **`cortex reindex [project]`** — rebuild the semantic (embedding) search index for already-ingested entities. Use it after enabling embeddings on a graph that was ingested *before* embeddings were turned on (new files are embedded automatically on ingest).
+
+### Docs
+
+- README now documents how to enable semantic search (`llm.embeddings`) with a cloud embeddings provider, and that the embeddings provider is independent of the chat provider.
+
 ## [0.8.0] - 2026-06-25
 
 ### Added

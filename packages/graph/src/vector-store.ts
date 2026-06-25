@@ -118,6 +118,17 @@ export class VectorStore {
     await this.table.delete(`entityId = "${entityId}"`);
   }
 
+  /** Drop all stored vectors (used for a full reindex). The table is recreated on next add. */
+  async clear(): Promise<void> {
+    if (!this.db) throw new Error('VectorStore not initialized');
+    try {
+      await this.db.dropTable(TABLE_NAME);
+    } catch {
+      // Table may not exist yet — nothing to clear.
+    }
+    this.table = null;
+  }
+
   async count(): Promise<number> {
     if (!this.table) return 0;
     return await this.table.countRows();

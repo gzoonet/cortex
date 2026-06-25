@@ -165,6 +165,14 @@ var llmCloudSchema = z.object({
   maxRetries: z.number().nonnegative().default(3),
   promptCaching: z.boolean().default(true)
 });
+var llmEmbeddingsSchema = z.object({
+  enabled: z.boolean().default(false),
+  provider: z.string().default("openai-compatible"),
+  baseUrl: z.string().url().default("https://api.openai.com/v1"),
+  model: z.string().default("text-embedding-3-small"),
+  apiKeySource: z.string().default("env:OPENAI_API_KEY"),
+  dimensions: z.number().positive().default(1536)
+});
 var llmConfigSchema = z.object({
   mode: z.enum(["cloud-first", "hybrid", "local-first", "local-only"]).default("cloud-first"),
   taskRouting: z.record(z.string(), z.enum(["auto", "local", "cloud"])).default({
@@ -185,7 +193,8 @@ var llmConfigSchema = z.object({
   cache: llmCacheSchema.default({}),
   budget: llmBudgetSchema.default({}),
   local: llmLocalSchema.default({}),
-  cloud: llmCloudSchema.default({})
+  cloud: llmCloudSchema.default({}),
+  embeddings: llmEmbeddingsSchema.optional()
 });
 var privacyConfigSchema = z.object({
   defaultLevel: z.enum(["standard", "sensitive", "restricted"]).default("standard"),
@@ -999,6 +1008,7 @@ var OpenAICompatibleProvider = class {
   client;
   primaryModel;
   fastModel;
+  embeddingModel;
   isGemini;
   capabilities = {
     supportedTasks: [
@@ -1028,6 +1038,7 @@ var OpenAICompatibleProvider = class {
     });
     this.primaryModel = options.primaryModel ?? "gpt-4o";
     this.fastModel = options.fastModel ?? "gpt-4o-mini";
+    this.embeddingModel = options.embeddingModel ?? "text-embedding-3-small";
     try {
       const parsedUrl = new URL(options.baseUrl);
       this.isGemini = parsedUrl.hostname === "generativelanguage.googleapis.com";
@@ -1118,8 +1129,18 @@ var OpenAICompatibleProvider = class {
       throw this.mapError(err);
     }
   }
-  async embed(_texts) {
-    throw new CortexError(LLM_PROVIDER_UNAVAILABLE, "medium", "llm", "OpenAI-compatible provider does not handle embeddings. Use local embedding model.");
+  async embed(texts) {
+    if (texts.length === 0)
+      return [];
+    try {
+      const response = await this.client.embeddings.create({
+        model: this.embeddingModel,
+        input: texts
+      });
+      return response.data.slice().sort((a, b) => a.index - b.index).map((d) => new Float32Array(d.embedding));
+    } catch (err) {
+      throw this.mapError(err);
+    }
   }
   async isAvailable() {
     try {
@@ -1562,6 +1583,7 @@ function resolveApiKeySource(source) {
 var Router = class _Router {
   cloudProvider = null;
   localProvider = null;
+  embeddingProvider = null;
   mode;
   taskRouting;
   tracker;
@@ -1620,6 +1642,28 @@ var Router = class _Router {
         timeoutMs: config9.llm.local.timeoutMs,
         keepAlive: config9.llm.local.keepAlive
       });
+    }
+    const embeddings = config9.llm.embeddings;
+    if (embeddings?.enabled) {
+      const embKey = resolveApiKeySource(embeddings.apiKeySource);
+      if (embKey) {
+        try {
+          this.embeddingProvider = new OpenAICompatibleProvider({
+            baseUrl: embeddings.baseUrl,
+            apiKey: embKey,
+            embeddingModel: embeddings.model,
+            timeoutMs: config9.llm.cloud.timeoutMs,
+            maxRetries: config9.llm.cloud.maxRetries
+          });
+          logger6.info("Embedding provider initialized", { baseUrl: embeddings.baseUrl, model: embeddings.model });
+        } catch (err) {
+          logger6.warn("Embedding provider init failed", {
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+      } else {
+        logger6.warn("llm.embeddings.enabled but API key not found", { source: embeddings.apiKeySource });
+      }
     }
     this.tracker = new TokenTracker(config9.llm.budget.monthlyLimitUsd, config9.llm.budget.warningThresholds);
     this.cache = new ResponseCache({
@@ -1875,6 +1919,25 @@ var Router = class _Router {
   }
   getLocalProvider() {
     return this.localProvider;
+  }
+  /**
+   * Generate embeddings via the dedicated embeddings provider (e.g. OpenAI),
+   * falling back to the local Ollama embedder if no cloud embeddings provider is configured.
+   */
+  async embed(texts) {
+    const provider = this.embeddingProvider ?? this.localProvider;
+    if (!provider) {
+      throw new CortexError(LLM_PROVIDER_UNAVAILABLE, "high", "llm", "No embedding provider available.", void 0, "Enable llm.embeddings with an API key, or run Ollama locally.", false);
+    }
+    return provider.embed(texts);
+  }
+  /** Whether semantic embeddings can be generated (cloud embeddings provider or local Ollama). */
+  hasEmbeddings() {
+    return !!this.embeddingProvider || !!this.localProvider;
+  }
+  /** Configured embedding vector dimension — used when creating the vector store table. */
+  embeddingDimensions() {
+    return this.config.llm.embeddings?.dimensions ?? 384;
   }
   getCloudProvider() {
     return this.cloudProvider;
@@ -3244,6 +3307,14 @@ var logger7 = createLogger("graph:vector-store");
 function resolveHomePath2(p) {
   return p.startsWith("~") ? p.replace("~", homedir4()) : p;
 }
+function entityEmbeddingText(e) {
+  const parts = [`${e.type}: ${e.name}`];
+  if (e.summary)
+    parts.push(e.summary);
+  if (e.content)
+    parts.push(e.content);
+  return parts.join("\n").slice(0, 8e3);
+}
 var TABLE_NAME = "entity_embeddings";
 var VectorStore = class {
   db = null;
@@ -3306,6 +3377,16 @@ var VectorStore = class {
     if (!this.table)
       return;
     await this.table.delete(`entityId = "${entityId}"`);
+  }
+  /** Drop all stored vectors (used for a full reindex). The table is recreated on next add. */
+  async clear() {
+    if (!this.db)
+      throw new Error("VectorStore not initialized");
+    try {
+      await this.db.dropTable(TABLE_NAME);
+    } catch {
+    }
+    this.table = null;
   }
   async count() {
     if (!this.table)
@@ -3427,7 +3508,10 @@ var QueryEngine = class {
       this.ftsSearch(query, projectId),
       queryEmbedding ? this.vectorStore.search(queryEmbedding, 30) : Promise.resolve([])
     ]);
-    const rankedEntities = this.mergeAndRank(ftsResults, vectorResults);
+    const ftsIds = new Set(ftsResults.map((e) => e.id));
+    const vectorOnlyIds = vectorResults.map((v) => v.entityId).filter((id) => !ftsIds.has(id));
+    const vectorOnlyEntities = vectorOnlyIds.length ? (await Promise.all(vectorOnlyIds.map((id) => this.sqliteStore.getEntity(id).catch(() => null)))).filter((e) => e !== null) : [];
+    const rankedEntities = this.mergeAndRank(ftsResults, vectorResults, vectorOnlyEntities);
     const contextEntities = [];
     let totalTokens = 0;
     const budgetForEntities = Math.floor(this.maxContextTokens * 0.7);
@@ -3522,15 +3606,20 @@ var QueryEngine = class {
       return [];
     }
   }
-  mergeAndRank(ftsResults, vectorResults) {
+  mergeAndRank(ftsResults, vectorResults, vectorOnlyEntities = []) {
     const scores = /* @__PURE__ */ new Map();
+    for (const entity of vectorOnlyEntities) {
+      scores.set(entity.id, { entity, score: 0 });
+    }
     for (let i = 0; i < ftsResults.length; i++) {
       const entity = ftsResults[i];
       const positionScore = 1 - i / Math.max(ftsResults.length, 1);
-      scores.set(entity.id, {
-        entity,
-        score: positionScore * this.ftsWeight
-      });
+      const existing = scores.get(entity.id);
+      if (existing) {
+        existing.score += positionScore * this.ftsWeight;
+      } else {
+        scores.set(entity.id, { entity, score: positionScore * this.ftsWeight });
+      }
     }
     if (vectorResults.length > 0) {
       const maxDist = Math.max(...vectorResults.map((r) => r.distance), 1);
@@ -3556,7 +3645,8 @@ async function createStoreBundle(configDir) {
     // never backup on MCP startup — adds latency, not needed
   });
   const vectorStore = new VectorStore({
-    dbPath: config9.graph.vectorDbPath
+    dbPath: config9.graph.vectorDbPath,
+    dimensions: config9.llm.embeddings?.dimensions ?? 384
   });
   await vectorStore.initialize();
   const queryEngine = new QueryEngine(store, vectorStore, {
@@ -4764,15 +4854,17 @@ var IngestionPipeline = class {
   router;
   store;
   options;
+  vectorStore;
   // Shared across all ingestFile calls — prevents the same entity pair from being
   // evaluated twice when multiple files ingest in the same batch.
   checkedContradictionPairs = /* @__PURE__ */ new Set();
   // Pre-compiled secret patterns for scrubbing before cloud LLM calls
   compiledSecretPatterns;
-  constructor(router, store, options) {
+  constructor(router, store, options, vectorStore) {
     this.router = router;
     this.store = store;
     this.options = options;
+    this.vectorStore = vectorStore;
     this.compiledSecretPatterns = compileSecretPatterns(options.secretPatterns ?? []);
   }
   /**
@@ -4883,6 +4975,7 @@ var IngestionPipeline = class {
           source: "ingest:pipeline"
         });
       }
+      await this.indexEmbeddings(storedEntities, existingFile?.entityIds ?? []);
       await runMergeDetection(storedEntities, filePath, this.store, this.router, this.options.mergeConfidenceThreshold);
       await runContradictionDetection(storedEntities, filePath, this.options.projectId, this.options.projectPrivacyLevel, this.store, this.router, this.checkedContradictionPairs);
       const relationshipIds = [];
@@ -5049,6 +5142,32 @@ var IngestionPipeline = class {
       return [];
     }
   }
+  /**
+   * Generate and store semantic embeddings for the given entities. Best-effort: failures
+   * are logged but never fail ingestion. Skipped when no vector store / embedding provider
+   * is configured, or for non-standard privacy projects (whose content must not reach the cloud).
+   */
+  async indexEmbeddings(entities, replacedEntityIds) {
+    if (!this.vectorStore || !this.router.hasEmbeddings())
+      return;
+    if (this.options.projectPrivacyLevel !== "standard")
+      return;
+    try {
+      for (const oldId of replacedEntityIds) {
+        await this.vectorStore.deleteByEntityId(oldId);
+      }
+      if (entities.length === 0)
+        return;
+      const texts = entities.map((e) => this.scrubSecrets(entityEmbeddingText(e)));
+      const vectors = await this.router.embed(texts);
+      await this.vectorStore.addVectors(entities.map((e, i) => ({ entityId: e.id, vector: vectors[i], text: texts[i] })));
+      logger12.debug("Indexed embeddings", { count: entities.length });
+    } catch (err) {
+      logger12.warn("Embedding indexing failed (non-fatal)", {
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
   deduplicateEntities(entities) {
     const seen = /* @__PURE__ */ new Map();
     for (const entity of entities) {
@@ -5099,6 +5218,12 @@ async function handleIngestFile(input, store, router) {
   if (!project) {
     return { status: "failed", fileId: "", entityIds: [], relationshipIds: [], entityCount: 0, error: "File does not belong to any registered project" };
   }
+  const config9 = loadConfig({ configDir: process.env["CORTEX_CONFIG_DIR"] });
+  const vectorStore = new VectorStore({
+    dbPath: config9.graph.vectorDbPath,
+    dimensions: config9.llm.embeddings?.dimensions ?? 384
+  });
+  await vectorStore.initialize();
   const pipeline = new IngestionPipeline(router, store, {
     projectId: project.id,
     projectName: project.name,
@@ -5107,7 +5232,7 @@ async function handleIngestFile(input, store, router) {
     batchSize: 10,
     projectPrivacyLevel: project.privacyLevel ?? "standard",
     mergeConfidenceThreshold: 0.85
-  });
+  }, vectorStore);
   const result = await pipeline.ingestFile(filePath);
   return {
     status: result.status,
@@ -5172,8 +5297,16 @@ async function handleRemoveProject(input) {
 
 // packages/mcp/dist/tools/ask.js
 async function handleCortexAsk(input, queryEngine, router, store) {
+  let queryEmbedding;
+  if (router.hasEmbeddings()) {
+    try {
+      [queryEmbedding] = await router.embed([input.question]);
+    } catch {
+      queryEmbedding = void 0;
+    }
+  }
   const [context, searchResults, allContradictions, graphStats, projects] = await Promise.all([
-    queryEngine.assembleContext(input.question, void 0, input.projectId),
+    queryEngine.assembleContext(input.question, queryEmbedding, input.projectId),
     store.searchEntities(input.question, 20),
     store.findContradictions({ status: "active", limit: 50 }),
     store.getStats(),
