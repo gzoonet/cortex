@@ -2,6 +2,16 @@
 
 All notable changes to GZOO Cortex will be documented in this file.
 
+## [0.8.0] - 2026-06-25
+
+### Added
+
+- **Semantic search via cloud embeddings** — a new optional `llm.embeddings` config lets Cortex generate vector embeddings through an OpenAI-compatible endpoint (e.g. OpenAI `text-embedding-3-small`), independent of the chat provider (useful when the chat model — e.g. DeepSeek — has no embeddings endpoint). `cortex_ask` and `cortex query` now embed the question and blend vector similarity with full-text search, surfacing entities by meaning rather than keywords alone. Embeddings are generated and stored on ingest (best-effort, privacy-gated to `standard` projects), and the query engine now returns vector-only matches.
+
+### Notes
+
+- Embeddings are **off by default**; enable with `llm.embeddings.enabled = true`, a `baseUrl`/`model`, and an `apiKeySource`. No local GPU or Ollama is required when using a cloud embeddings provider.
+
 ## [0.7.1] - 2026-06-23
 
 ### Security
