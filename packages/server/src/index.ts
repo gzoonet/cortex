@@ -30,11 +30,15 @@ export interface ServerBundle {
   store: SQLiteStore;
   queryEngine: QueryEngine;
   router: LLMRouter;
+  vectorStore: VectorStore;
 }
 
 function createBundle(config: CortexConfig): ServerBundle {
   const store = new SQLiteStore({ dbPath: config.graph.dbPath, backupOnStartup: false });
-  const vectorStore = new VectorStore();
+  const vectorStore = new VectorStore({
+    dbPath: config.graph.vectorDbPath,
+    dimensions: config.llm.embeddings?.dimensions ?? 384,
+  });
   const queryEngine = new QueryEngine(store, vectorStore);
   const router = new LLMRouter({ config });
   // Hydrate tracker with existing spend so budget enforcement works
@@ -46,7 +50,7 @@ function createBundle(config: CortexConfig): ServerBundle {
   router.getTracker().setPersist((record) => {
     store.insertTokenUsage(record);
   });
-  return { store, queryEngine, router };
+  return { store, queryEngine, router, vectorStore };
 }
 
 export async function startServer(options: ServerOptions): Promise<void> {
@@ -55,6 +59,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
   const host = options.host ?? config.server?.host ?? '127.0.0.1';
 
   const bundle = createBundle(config);
+  await bundle.vectorStore.initialize();
   const app = express();
   const server = createServer(app);
 
@@ -212,6 +217,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
               mergeConfidenceThreshold: 0.85,
               secretPatterns: config.privacy.secretPatterns,
             },
+            bundle.vectorStore,
           );
 
           const watcher = new FileWatcher({

@@ -45,9 +45,19 @@ export async function handleCortexAsk(
   router: Router,
   store: SQLiteStore,
 ): Promise<CortexAskResult> {
+  // Compute a query embedding for semantic search (best-effort — falls back to FTS-only).
+  let queryEmbedding: Float32Array | undefined;
+  if (router.hasEmbeddings()) {
+    try {
+      [queryEmbedding] = await router.embed([input.question]);
+    } catch {
+      queryEmbedding = undefined;
+    }
+  }
+
   // Parallel data gathering
   const [context, searchResults, allContradictions, graphStats, projects] = await Promise.all([
-    queryEngine.assembleContext(input.question, undefined, input.projectId),
+    queryEngine.assembleContext(input.question, queryEmbedding, input.projectId),
     store.searchEntities(input.question, 20),
     store.findContradictions({ status: 'active', limit: 50 }),
     store.getStats(),

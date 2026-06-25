@@ -68,8 +68,19 @@ export class QueryEngine {
       queryEmbedding ? this.vectorStore.search(queryEmbedding, 30) : Promise.resolve([]),
     ]);
 
+    // Fetch entities that matched ONLY via vector search (not present in FTS results),
+    // so semantically-similar entities surface even when they share no keywords.
+    const ftsIds = new Set(ftsResults.map((e) => e.id));
+    const vectorOnlyIds = vectorResults
+      .map((v) => v.entityId)
+      .filter((id) => !ftsIds.has(id));
+    const vectorOnlyEntities = vectorOnlyIds.length
+      ? (await Promise.all(vectorOnlyIds.map((id) => this.sqliteStore.getEntity(id).catch(() => null))))
+          .filter((e): e is Entity => e !== null)
+      : [];
+
     // Merge and rank results
-    const rankedEntities = this.mergeAndRank(ftsResults, vectorResults);
+    const rankedEntities = this.mergeAndRank(ftsResults, vectorResults, vectorOnlyEntities);
 
     // Collect entities up to token budget and entity count limit
     const contextEntities: Entity[] = [];
@@ -205,18 +216,26 @@ export class QueryEngine {
   private mergeAndRank(
     ftsResults: Entity[],
     vectorResults: VectorSearchResult[],
+    vectorOnlyEntities: Entity[] = [],
   ): Entity[] {
     // Score-based ranking combining FTS rank position and vector distance
     const scores = new Map<string, { entity: Entity; score: number }>();
+
+    // Seed vector-only entities (matched by embedding, not keywords) so they can surface.
+    for (const entity of vectorOnlyEntities) {
+      scores.set(entity.id, { entity, score: 0 });
+    }
 
     // FTS results: score by position (best match first)
     for (let i = 0; i < ftsResults.length; i++) {
       const entity = ftsResults[i]!;
       const positionScore = 1 - i / Math.max(ftsResults.length, 1);
-      scores.set(entity.id, {
-        entity,
-        score: positionScore * this.ftsWeight,
-      });
+      const existing = scores.get(entity.id);
+      if (existing) {
+        existing.score += positionScore * this.ftsWeight;
+      } else {
+        scores.set(entity.id, { entity, score: positionScore * this.ftsWeight });
+      }
     }
 
     // Vector results: score by inverse distance
@@ -228,8 +247,6 @@ export class QueryEngine {
         if (existing) {
           existing.score += distScore * this.vectorWeight;
         }
-        // Vector-only results would need entity fetch — skip for now.
-        // They'll be included once QueryEngine integrates more tightly.
       }
     }
 

@@ -86,6 +86,7 @@ function resolveApiKeySource(source: string): string | undefined {
 export class Router {
   private cloudProvider: CloudProvider | null = null;
   private localProvider: OllamaProvider | null = null;
+  private embeddingProvider: OpenAICompatibleProvider | null = null;
   private mode: LLMMode;
   private taskRouting: Record<string, TaskRouting>;
   private tracker: TokenTracker;
@@ -148,6 +149,31 @@ export class Router {
         timeoutMs: config.llm.local.timeoutMs,
         keepAlive: config.llm.local.keepAlive,
       });
+    }
+
+    // Dedicated embeddings provider (e.g. OpenAI). Independent of the chat cloud provider
+    // because the chat model (e.g. DeepSeek) may not expose an embeddings endpoint.
+    const embeddings = config.llm.embeddings;
+    if (embeddings?.enabled) {
+      const embKey = resolveApiKeySource(embeddings.apiKeySource);
+      if (embKey) {
+        try {
+          this.embeddingProvider = new OpenAICompatibleProvider({
+            baseUrl: embeddings.baseUrl,
+            apiKey: embKey,
+            embeddingModel: embeddings.model,
+            timeoutMs: config.llm.cloud.timeoutMs,
+            maxRetries: config.llm.cloud.maxRetries,
+          });
+          logger.info('Embedding provider initialized', { baseUrl: embeddings.baseUrl, model: embeddings.model });
+        } catch (err) {
+          logger.warn('Embedding provider init failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      } else {
+        logger.warn('llm.embeddings.enabled but API key not found', { source: embeddings.apiKeySource });
+      }
     }
 
     this.tracker = new TokenTracker(
@@ -591,6 +617,36 @@ export class Router {
 
   getLocalProvider(): OllamaProvider | null {
     return this.localProvider;
+  }
+
+  /**
+   * Generate embeddings via the dedicated embeddings provider (e.g. OpenAI),
+   * falling back to the local Ollama embedder if no cloud embeddings provider is configured.
+   */
+  async embed(texts: string[]): Promise<Float32Array[]> {
+    const provider = this.embeddingProvider ?? this.localProvider;
+    if (!provider) {
+      throw new CortexError(
+        LLM_PROVIDER_UNAVAILABLE,
+        'high',
+        'llm',
+        'No embedding provider available.',
+        undefined,
+        'Enable llm.embeddings with an API key, or run Ollama locally.',
+        false,
+      );
+    }
+    return provider.embed(texts);
+  }
+
+  /** Whether semantic embeddings can be generated (cloud embeddings provider or local Ollama). */
+  hasEmbeddings(): boolean {
+    return !!this.embeddingProvider || !!this.localProvider;
+  }
+
+  /** Configured embedding vector dimension — used when creating the vector store table. */
+  embeddingDimensions(): number {
+    return this.config.llm.embeddings?.dimensions ?? 384;
   }
 
   getCloudProvider(): CloudProvider | null {

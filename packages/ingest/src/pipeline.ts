@@ -18,7 +18,7 @@ import {
   entityExtractionPrompt,
   relationshipInferencePrompt,
 } from '@cortex/llm';
-import type { SQLiteStore } from '@cortex/graph';
+import { entityEmbeddingText, type SQLiteStore, type VectorStore } from '@cortex/graph';
 import { getParser } from './parsers/index.js';
 import { chunkSections, type Chunk } from './chunker.js';
 import { compileSecretPatterns } from './secret-patterns.js';
@@ -49,6 +49,7 @@ export class IngestionPipeline {
   private router: Router;
   private store: SQLiteStore;
   private options: PipelineOptions;
+  private vectorStore?: VectorStore;
   // Shared across all ingestFile calls — prevents the same entity pair from being
   // evaluated twice when multiple files ingest in the same batch.
   private checkedContradictionPairs: Set<string> = new Set();
@@ -59,10 +60,12 @@ export class IngestionPipeline {
     router: Router,
     store: SQLiteStore,
     options: PipelineOptions,
+    vectorStore?: VectorStore,
   ) {
     this.router = router;
     this.store = store;
     this.options = options;
+    this.vectorStore = vectorStore;
     this.compiledSecretPatterns = compileSecretPatterns(options.secretPatterns ?? []);
   }
 
@@ -210,6 +213,9 @@ export class IngestionPipeline {
           source: 'ingest:pipeline',
         });
       }
+
+      // Generate + store semantic embeddings for the new entities (best-effort).
+      await this.indexEmbeddings(storedEntities, existingFile?.entityIds ?? []);
 
       // Post-ingest: merge detection (P3) and contradiction detection (P4)
       await runMergeDetection(
@@ -436,6 +442,33 @@ export class IngestionPipeline {
         error: err instanceof Error ? err.message : String(err),
       });
       return [];
+    }
+  }
+
+  /**
+   * Generate and store semantic embeddings for the given entities. Best-effort: failures
+   * are logged but never fail ingestion. Skipped when no vector store / embedding provider
+   * is configured, or for non-standard privacy projects (whose content must not reach the cloud).
+   */
+  private async indexEmbeddings(entities: Entity[], replacedEntityIds: string[]): Promise<void> {
+    if (!this.vectorStore || !this.router.hasEmbeddings()) return;
+    if (this.options.projectPrivacyLevel !== 'standard') return;
+    try {
+      // Drop stale vectors for entities that were replaced on re-ingest.
+      for (const oldId of replacedEntityIds) {
+        await this.vectorStore.deleteByEntityId(oldId);
+      }
+      if (entities.length === 0) return;
+      const texts = entities.map((e) => this.scrubSecrets(entityEmbeddingText(e)));
+      const vectors = await this.router.embed(texts);
+      await this.vectorStore.addVectors(
+        entities.map((e, i) => ({ entityId: e.id, vector: vectors[i]!, text: texts[i]! })),
+      );
+      logger.debug('Indexed embeddings', { count: entities.length });
+    } catch (err) {
+      logger.warn('Embedding indexing failed (non-fatal)', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

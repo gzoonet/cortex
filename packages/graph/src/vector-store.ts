@@ -1,12 +1,26 @@
 import { connect, type Connection, type Table } from '@lancedb/lancedb';
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { createLogger } from '@cortex/core';
+import { createLogger, type Entity } from '@cortex/core';
 
 const logger = createLogger('graph:vector-store');
 
 function resolveHomePath(p: string): string {
   return p.startsWith('~') ? p.replace('~', homedir()) : p;
+}
+
+/**
+ * Canonical text representation of an entity for embedding. Used by both the ingest
+ * pipeline (when storing vectors) and the backfill, so stored vectors and query
+ * vectors live in the same embedding space.
+ */
+export function entityEmbeddingText(
+  e: Pick<Entity, 'type' | 'name' | 'summary' | 'content'>,
+): string {
+  const parts = [`${e.type}: ${e.name}`];
+  if (e.summary) parts.push(e.summary);
+  if (e.content) parts.push(e.content);
+  return parts.join('\n').slice(0, 8000);
 }
 
 export interface VectorSearchResult {

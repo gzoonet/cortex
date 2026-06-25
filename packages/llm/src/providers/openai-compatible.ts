@@ -19,6 +19,7 @@ export interface OpenAICompatibleProviderOptions {
   apiKey?: string;
   primaryModel?: string;
   fastModel?: string;
+  embeddingModel?: string;
   timeoutMs?: number;
   maxRetries?: number;
 }
@@ -30,6 +31,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
   private client: OpenAI;
   private primaryModel: string;
   private fastModel: string;
+  private embeddingModel: string;
   private isGemini: boolean;
 
   readonly capabilities: ProviderCapabilities = {
@@ -72,6 +74,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     this.primaryModel = options.primaryModel ?? 'gpt-4o';
     this.fastModel = options.fastModel ?? 'gpt-4o-mini';
+    this.embeddingModel = options.embeddingModel ?? 'text-embedding-3-small';
     try {
       const parsedUrl = new URL(options.baseUrl);
       this.isGemini = parsedUrl.hostname === 'generativelanguage.googleapis.com';
@@ -200,13 +203,21 @@ export class OpenAICompatibleProvider implements LLMProvider {
     }
   }
 
-  async embed(_texts: string[]): Promise<Float32Array[]> {
-    throw new CortexError(
-      LLM_PROVIDER_UNAVAILABLE,
-      'medium',
-      'llm',
-      'OpenAI-compatible provider does not handle embeddings. Use local embedding model.',
-    );
+  async embed(texts: string[]): Promise<Float32Array[]> {
+    if (texts.length === 0) return [];
+    try {
+      const response = await this.client.embeddings.create({
+        model: this.embeddingModel,
+        input: texts,
+      });
+      // Sort by index so vectors line up with the input order, regardless of server ordering.
+      return response.data
+        .slice()
+        .sort((a, b) => a.index - b.index)
+        .map((d) => new Float32Array(d.embedding as number[]));
+    } catch (err) {
+      throw this.mapError(err);
+    }
   }
 
   async isAvailable(): Promise<boolean> {

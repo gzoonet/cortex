@@ -1,9 +1,9 @@
 import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { SQLiteStore } from '@cortex/graph';
+import { VectorStore, type SQLiteStore } from '@cortex/graph';
 import type { Router } from '@cortex/llm';
 import { IngestionPipeline, type PipelineResult } from '@cortex/ingest';
-import { findProjectByPath } from '@cortex/core';
+import { findProjectByPath, loadConfig } from '@cortex/core';
 
 export interface IngestFileInput {
   filePath: string;
@@ -69,6 +69,13 @@ export async function handleIngestFile(
     return { status: 'failed', fileId: '', entityIds: [], relationshipIds: [], entityCount: 0, error: 'File does not belong to any registered project' };
   }
 
+  const config = loadConfig({ configDir: process.env['CORTEX_CONFIG_DIR'] });
+  const vectorStore = new VectorStore({
+    dbPath: config.graph.vectorDbPath,
+    dimensions: config.llm.embeddings?.dimensions ?? 384,
+  });
+  await vectorStore.initialize();
+
   const pipeline = new IngestionPipeline(router, store, {
     projectId: project.id,
     projectName: project.name,
@@ -77,7 +84,7 @@ export async function handleIngestFile(
     batchSize: 10,
     projectPrivacyLevel: (project.privacyLevel as 'standard' | 'sensitive' | 'restricted') ?? 'standard',
     mergeConfidenceThreshold: 0.85,
-  });
+  }, vectorStore);
 
   const result: PipelineResult = await pipeline.ingestFile(filePath);
 

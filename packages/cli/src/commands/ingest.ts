@@ -4,7 +4,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import chalk from 'chalk';
 import { loadConfig, createLogger, getProject } from '@cortex/core';
-import { SQLiteStore } from '@cortex/graph';
+import { SQLiteStore, VectorStore } from '@cortex/graph';
 import { Router } from '@cortex/llm';
 import { IngestionPipeline, getParser } from '@cortex/ingest';
 import { wireTokenPersistence } from '../index.js';
@@ -359,6 +359,12 @@ async function runIngest(
     });
   }
 
+  const vectorStore = new VectorStore({
+    dbPath: config.graph.vectorDbPath,
+    dimensions: config.llm.embeddings?.dimensions ?? 384,
+  });
+  await vectorStore.initialize();
+
   const pipeline = new IngestionPipeline(router, store, {
     projectId: project.id,
     projectName: project.name,
@@ -368,7 +374,7 @@ async function runIngest(
     projectPrivacyLevel: project.privacyLevel,
     mergeConfidenceThreshold: config.graph.mergeConfidenceThreshold,
     secretPatterns: config.privacy.secretPatterns,
-  });
+  }, vectorStore);
 
   let totalEntities = 0;
   let totalRelationships = 0;

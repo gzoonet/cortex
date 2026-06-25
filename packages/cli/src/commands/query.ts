@@ -49,7 +49,10 @@ async function runQuery(
   const config = loadConfig({ configDir: globals.config ? resolve(globals.config) : undefined });
 
   const store = new SQLiteStore({ dbPath: config.graph.dbPath, backupOnStartup: false });
-  const vectorStore = new VectorStore({ dbPath: config.graph.vectorDbPath });
+  const vectorStore = new VectorStore({
+    dbPath: config.graph.vectorDbPath,
+    dimensions: config.llm.embeddings?.dimensions ?? 384,
+  });
   await vectorStore.initialize();
   const queryEngine = new QueryEngine(store, vectorStore, { maxContextTokens: config.llm.maxContextTokens });
   const router = new Router({ config });
@@ -71,8 +74,18 @@ async function runQuery(
       : '',
   ].filter(Boolean).join('\n');
 
+  // Compute a query embedding for semantic search (best-effort — falls back to FTS-only).
+  let queryEmbedding: Float32Array | undefined;
+  if (router.hasEmbeddings()) {
+    try {
+      [queryEmbedding] = await router.embed([question]);
+    } catch {
+      queryEmbedding = undefined;
+    }
+  }
+
   // Assemble context
-  const context = await queryEngine.assembleContext(question, undefined, opts.project);
+  const context = await queryEngine.assembleContext(question, queryEmbedding, opts.project);
 
   if (opts.raw) {
     console.log(chalk.dim(`Context: ${context.entities.length} entities, ${context.relationships.length} rels, ~${context.totalTokensEstimate} tokens\n`));

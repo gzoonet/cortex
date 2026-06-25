@@ -65,6 +65,15 @@ export interface LLMCloudConfig {
   promptCaching: boolean;
 }
 
+export interface LLMEmbeddingsConfig {
+  enabled: boolean;
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKeySource: string;
+  dimensions: number;
+}
+
 export interface LLMConfig {
   mode: LLMMode;
   taskRouting: Record<string, TaskRouting>;
@@ -74,6 +83,7 @@ export interface LLMConfig {
   budget: LLMBudgetConfig;
   local: LLMLocalConfig;
   cloud: LLMCloudConfig;
+  embeddings?: LLMEmbeddingsConfig;
 }
 
 export interface PrivacyConfig {

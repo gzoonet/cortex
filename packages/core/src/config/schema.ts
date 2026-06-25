@@ -65,6 +65,18 @@ export const llmCloudSchema = z.object({
   promptCaching: z.boolean().default(true),
 });
 
+// Dedicated embeddings provider — independent of the chat cloud provider, since the
+// chat model (e.g. DeepSeek) may not expose an embeddings endpoint. When enabled, the
+// router uses this to generate vectors for semantic search (e.g. OpenAI text-embedding-3-small).
+export const llmEmbeddingsSchema = z.object({
+  enabled: z.boolean().default(false),
+  provider: z.string().default('openai-compatible'),
+  baseUrl: z.string().url().default('https://api.openai.com/v1'),
+  model: z.string().default('text-embedding-3-small'),
+  apiKeySource: z.string().default('env:OPENAI_API_KEY'),
+  dimensions: z.number().positive().default(1536),
+});
+
 export const llmConfigSchema = z.object({
   mode: z.enum(['cloud-first', 'hybrid', 'local-first', 'local-only']).default('cloud-first'),
   taskRouting: z.record(z.string(), z.enum(['auto', 'local', 'cloud'])).default({
@@ -86,6 +98,7 @@ export const llmConfigSchema = z.object({
   budget: llmBudgetSchema.default({}),
   local: llmLocalSchema.default({}),
   cloud: llmCloudSchema.default({}),
+  embeddings: llmEmbeddingsSchema.optional(),
 });
 
 export const privacyConfigSchema = z.object({

@@ -18,6 +18,7 @@ export async function createStoreBundle(configDir?: string): Promise<StoreBundle
 
   const vectorStore = new VectorStore({
     dbPath: config.graph.vectorDbPath,
+    dimensions: config.llm.embeddings?.dimensions ?? 384,
   });
   await vectorStore.initialize();
 
