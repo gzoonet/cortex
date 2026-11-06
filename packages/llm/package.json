@@ -20,6 +20,6 @@
     "@anthropic-ai/sdk": "^0.78.0",
     "@cortex/core": "*",
     "openai": "^4.0.0",
-    "zod": "^3.25.76"
+    "zod": "^4.6.7"
   }
 }
