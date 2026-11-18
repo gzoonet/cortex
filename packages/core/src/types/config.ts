@@ -104,6 +104,7 @@ export interface ServerConfig {
   port: number;
   host: string;
   cors: string[];
+  allowedHosts: string[];
   auth: ServerAuthConfig;
 }
 

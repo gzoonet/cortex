@@ -1,5 +1,5 @@
 import type { Entity, Relationship } from '@cortex/core';
-import { createLogger } from '@cortex/core';
+import { createLogger, normalizePrivacyLevel } from '@cortex/core';
 import type { SQLiteStore } from './sqlite-store.js';
 import type { VectorStore, VectorSearchResult } from './vector-store.js';
 
@@ -130,7 +130,12 @@ export class QueryEngine {
     };
   }
 
-  private async filterByPrivacy(entities: Entity[]): Promise<Entity[]> {
+  /**
+   * Apply the project privacy policy to entities before they reach an LLM prompt
+   * or an external client: restricted entities are dropped, sensitive ones keep
+   * only name/type/metadata. Unknown or missing projects fail closed (restricted).
+   */
+  async filterByPrivacy(entities: Entity[]): Promise<Entity[]> {
     if (entities.length === 0) return entities;
 
     // Batch-fetch unique project IDs to avoid N+1 queries
@@ -149,7 +154,7 @@ export class QueryEngine {
     let redacted = 0;
 
     for (const entity of entities) {
-      const level = projectPrivacy.get(entity.projectId) ?? 'standard';
+      const level = normalizePrivacyLevel(projectPrivacy.get(entity.projectId));
 
       if (level === 'restricted') {
         excluded++;
@@ -158,7 +163,9 @@ export class QueryEngine {
 
       if (level === 'sensitive') {
         redacted++;
-        filtered.push({ ...entity, content: '[REDACTED]', properties: {} });
+        // Sensitive: only names, types and metadata may leave the machine. The
+        // summary is LLM-written free text derived from the content, so it goes too.
+        filtered.push({ ...entity, content: '[REDACTED]', summary: undefined, properties: {} });
         continue;
       }
 

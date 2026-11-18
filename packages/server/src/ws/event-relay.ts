@@ -1,7 +1,8 @@
 import { WebSocketServer, WebSocket } from 'ws';
-import type { Server } from 'node:http';
+import type { IncomingMessage, Server } from 'node:http';
 import { type CortexConfig, eventBus, createLogger } from '@cortex/core';
 import { validateWsToken } from '../middleware/auth.js';
+import { createRequestGuard } from '../middleware/request-guard.js';
 
 const logger = createLogger('server:ws');
 
@@ -24,7 +25,24 @@ export interface EventRelayHandle {
 }
 
 export function createEventRelay(server: Server, config?: CortexConfig, host?: string): EventRelayHandle {
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  const guard = config && host ? createRequestGuard(config, host) : undefined;
+  // Reject bad handshakes before the upgrade completes: cross-site origins (WebSockets
+  // bypass CORS) with 403, missing/invalid tokens with 401. The connection-level token
+  // check below stays as a second line of defense.
+  const verifyClient = config && host && guard
+    ? (
+        info: { origin: string; req: IncomingMessage },
+        done: (ok: boolean, code?: number, message?: string) => void,
+      ): void => {
+        if (!guard.verifyWsClient(info)) return done(false, 403, 'Forbidden');
+        if (!validateWsToken(config, host, info.req.url, info.req.headers.authorization)) {
+          logger.warn('WebSocket handshake rejected: invalid or missing token');
+          return done(false, 401, 'Unauthorized');
+        }
+        done(true);
+      }
+    : undefined;
+  const wss = new WebSocketServer({ server, path: '/ws', verifyClient });
   const unsubscribers: Array<() => void> = [];
 
   wss.on('connection', (ws, req) => {

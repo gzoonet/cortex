@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import {
   eventBus,
   createLogger,
+  getDefaultConfig,
   CortexError,
   INGEST_PARSE_FAILED,
   INGEST_FILE_TOO_LARGE,
@@ -66,7 +67,11 @@ export class IngestionPipeline {
     this.store = store;
     this.options = options;
     this.vectorStore = vectorStore;
-    this.compiledSecretPatterns = compileSecretPatterns(options.secretPatterns ?? []);
+    // Fall back to the built-in patterns so a caller that forgets to pass them
+    // still redacts secrets. An explicit [] remains a deliberate opt-out.
+    this.compiledSecretPatterns = compileSecretPatterns(
+      options.secretPatterns ?? getDefaultConfig().privacy.secretPatterns,
+    );
   }
 
   /**

@@ -224,7 +224,7 @@ export function createCortexMcpServer(bundle: StoreBundle, router: Router): McpS
       inputSchema: {
         name: z.string().describe('Unique project name (e.g., "my-app", "api-server")'),
         path: z.string().describe('Absolute path to the project root directory'),
-        privacyLevel: z.string().optional().describe(
+        privacyLevel: z.enum(['standard', 'sensitive', 'restricted']).optional().describe(
           'Privacy level: standard (default), sensitive, or restricted. ' +
           'Restricted projects are never sent to cloud LLMs.',
         ),
@@ -232,7 +232,7 @@ export function createCortexMcpServer(bundle: StoreBundle, router: Router): McpS
     },
     async ({ name, path, privacyLevel }) => {
       const result = await handleAddProject(
-        { name, path, privacyLevel: privacyLevel as 'standard' | 'sensitive' | 'restricted' | undefined },
+        { name, path, privacyLevel },
         bundle.store,
       );
       return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };

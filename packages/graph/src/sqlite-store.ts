@@ -18,6 +18,8 @@ import {
   CortexError,
   GRAPH_DB_ERROR,
   GRAPH_ENTITY_NOT_FOUND,
+  isPrivacyLevel,
+  normalizePrivacyLevel,
 } from '@cortex/core';
 import { up as applyInitialMigration } from './migrations/001-initial.js';
 import { up as applyIndexMigration } from './migrations/002-add-indexes.js';
@@ -233,7 +235,8 @@ function rowToProject(row: ProjectRow): Project {
     id: row.id,
     name: row.name,
     rootPath: row.root_path,
-    privacyLevel: row.privacy_level as Project['privacyLevel'],
+    // Fail closed: an unrecognized stored value is treated as restricted.
+    privacyLevel: normalizePrivacyLevel(row.privacy_level),
     fileCount: row.file_count,
     entityCount: row.entity_count,
     lastIngestedAt: row.last_ingested_at ?? undefined,
@@ -820,6 +823,14 @@ export class SQLiteStore implements GraphStore {
   async createProject(
     project: Omit<Project, 'id' | 'createdAt'>,
   ): Promise<Project> {
+    if (!isPrivacyLevel(project.privacyLevel)) {
+      throw new CortexError(
+        GRAPH_DB_ERROR,
+        'medium',
+        'graph',
+        `Invalid privacy level "${String(project.privacyLevel)}". Expected standard, sensitive, or restricted.`,
+      );
+    }
     const id = randomUUID();
     const ts = now();
 

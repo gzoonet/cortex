@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { resolve, dirname } from 'node:path';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync, chmodSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { loadConfig, createLogger } from '@cortex/core';
@@ -50,16 +50,24 @@ function ensureAuthToken(host: string, config: ReturnType<typeof loadConfig>): v
   const token = randomBytes(32).toString('hex');
   const envDir = resolve(homedir(), '.cortex');
   const envPath = resolve(envDir, '.env');
-  mkdirSync(envDir, { recursive: true });
+  // Owner-only permissions: the .env holds credentials (matches `cortex init`).
+  mkdirSync(envDir, { recursive: true, mode: 0o700 });
 
   const line = `CORTEX_SERVER_AUTH_TOKEN=${token}`;
   if (existsSync(envPath)) {
     const content = readFileSync(envPath, 'utf-8');
     if (!content.includes('CORTEX_SERVER_AUTH_TOKEN')) {
-      appendFileSync(envPath, `\n${line}\n`);
+      appendFileSync(envPath, `\n${line}\n`, { mode: 0o600 });
     }
   } else {
-    writeFileSync(envPath, `${line}\n`);
+    writeFileSync(envPath, `${line}\n`, { mode: 0o600 });
+  }
+  // `mode` only applies on creation; tighten a pre-existing directory and file too.
+  try {
+    chmodSync(envDir, 0o700);
+    chmodSync(envPath, 0o600);
+  } catch {
+    // Best effort (e.g. Windows, or a file owned by another user)
   }
 
   // Apply to current config so the server picks it up

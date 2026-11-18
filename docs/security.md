@@ -30,8 +30,10 @@ Classification is per-directory, inherited by files. Most restrictive wins.
 If any check fails critically, the request is **blocked** (not queued, not retried to cloud).
 
 > **Implementation status:**
-> - Step 1 (privacy check): Enforced during ingestion and query paths. `restricted` entities are excluded from query context entirely. `sensitive` entities have their `content` redacted to `[REDACTED]` before being sent to cloud LLMs. Applies to all query entry points (REST API, CLI, MCP).
-> - Step 2 (secret scan): Implemented. `secretPatterns` from config are compiled at pipeline construction and applied via `scrubSecrets()` before cloud LLM transmission (standard privacy level only; sensitive/restricted use local provider). Matches are replaced with `[SECRET_REDACTED]`.
+> - Step 1 (privacy check): Enforced during ingestion and query paths. `restricted` entities are excluded from query context entirely. `sensitive` entities have their `content`, `summary` and `properties` removed (content becomes `[REDACTED]`) before being sent to cloud LLMs. Applies to all query entry points (REST API, CLI, MCP `cortex_ask`).
+> - Privacy levels fail closed: a stored value that is not exactly `standard`, `sensitive` or `restricted`, or an entity whose project cannot be found, is treated as `restricted`. New projects with an invalid level are rejected.
+> - Contradiction detection compares entities across projects, so the level is decided per pair as the stricter of the two projects: a restricted side skips the pair, a sensitive side forces the local provider.
+> - Step 2 (secret scan): Implemented. `secretPatterns` from config are compiled at pipeline construction and applied via `scrubSecrets()` before cloud LLM transmission (standard privacy level only; sensitive/restricted use local provider). Matches are replaced with `[SECRET_REDACTED]`. Every ingest entry point (CLI, watcher, server, MCP `ingest_file`) passes the configured patterns; a pipeline built without them falls back to the default patterns.
 > - Step 3 (PII detection): Planned for future release.
 > - Step 4 (size validation): Not yet implemented.
 
@@ -111,7 +113,12 @@ No analytics, no update checks, no phone-home. Ever.
 - WebSocket: `127.0.0.1:3710`
 - **Authentication:** Bearer token auth on all `/api/v1/*` routes and WebSocket connections. Enforced automatically when `server.host` is non-localhost. Can be enabled explicitly via `server.auth.enabled = true` or `CORTEX_SERVER_AUTH_TOKEN` env var. Tokens are compared using `timingSafeEqual`. When serving on a non-localhost host without a configured token, one is auto-generated and saved to `~/.cortex/.env`.
 - WebSocket auth uses query string: `ws://host:port/ws?token=<token>`
-- No rate limiting on API endpoints yet. See [issue #9](https://github.com/gzoonet/cortex/issues/9).
+- **Browser protections in unauthenticated mode** (localhost bind, auth off):
+  - Host-header allowlist against DNS rebinding. Only `localhost`, `127.0.0.1`, `[::1]` and names in `server.allowedHosts` are served; anything else gets `421 SERVER_HOST_NOT_ALLOWED`.
+  - WebSocket Origin check, since WebSockets are not covered by CORS. A handshake is accepted only with no Origin (non-browser clients), a same-origin Origin, or one listed in `server.cors`.
+  - When auth is required, the bearer token already blocks both attacks, so these checks are skipped to keep reverse-proxy setups working.
+- Rate limiting: LLM-backed API routes are limited per client IP. `X-Forwarded-For` is honored only from a proxy on the loopback interface, so direct remote clients cannot spoof their IP.
+- Credential files (`~/.cortex/.env`) are written with mode `0600` in a `0700` directory.
 
 ## API Key Management
 

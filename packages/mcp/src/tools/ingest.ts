@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { VectorStore, type SQLiteStore } from '@cortex/graph';
 import type { Router } from '@cortex/llm';
 import { IngestionPipeline, type PipelineResult } from '@cortex/ingest';
-import { findProjectByPath, loadConfig } from '@cortex/core';
+import { findProjectByPath, loadConfig, normalizePrivacyLevel } from '@cortex/core';
 
 export interface IngestFileInput {
   filePath: string;
@@ -80,10 +80,12 @@ export async function handleIngestFile(
     projectId: project.id,
     projectName: project.name,
     projectRoot: project.rootPath,
-    maxFileSize: 1_048_576,
+    maxFileSize: config.ingest.maxFileSize,
     batchSize: 10,
-    projectPrivacyLevel: (project.privacyLevel as 'standard' | 'sensitive' | 'restricted') ?? 'standard',
+    projectPrivacyLevel: normalizePrivacyLevel(project.privacyLevel),
     mergeConfidenceThreshold: 0.85,
+    // Same secret redaction as `cortex ingest` / `cortex watch` before any cloud call.
+    secretPatterns: config.privacy.secretPatterns,
   }, vectorStore);
 
   const result: PipelineResult = await pipeline.ingestFile(filePath);
