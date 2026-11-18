@@ -69,7 +69,7 @@ export const outputSchema = z.object({
     summary: z.string().max(300),
     confidence: z.number().min(0).max(1),
     tags: z.array(z.string()),
-    properties: z.record(z.unknown()),
+    properties: z.record(z.string(), z.unknown()),
   })),
 });
 
