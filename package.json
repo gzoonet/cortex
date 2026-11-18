@@ -56,7 +56,7 @@
     "npm": ">=9.0.0"
   },
   "devDependencies": {
-    "@types/node": "^20.19.35",
+    "@types/node": "^22.19.0",
     "esbuild": "^0.28.1",
     "typescript": "^5.9.3",
     "vite": "^8.3.8",
@@ -84,7 +84,7 @@
     "unified": "^11.0.5",
     "ws": "^8.18.0",
     "yaml": "^2.8.2",
-    "zod": "^4.6.7"
+    "zod": "^3.25.76"
   },
   "overrides": {
     "hono": "^4.13.16",
