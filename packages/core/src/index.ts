@@ -43,6 +43,9 @@ export {
   SERVER_AUTH_INVALID,
 } from './errors/cortex-error.js';
 
+// Privacy
+export { PRIVACY_LEVELS, isPrivacyLevel, normalizePrivacyLevel, stricterPrivacyLevel } from './privacy.js';
+
 // EventBus
 export { EventBus, eventBus } from './events/event-bus.js';
 

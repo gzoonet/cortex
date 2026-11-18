@@ -125,6 +125,8 @@ export const serverConfigSchema = z.object({
   port: z.number().int().min(1).max(65535).default(3710),
   host: z.string().default('127.0.0.1'),
   cors: z.array(z.string()).default(['http://localhost:5173']),
+  // Extra Host-header names accepted in unauthenticated mode (e.g. a reverse-proxy domain).
+  allowedHosts: z.array(z.string()).default([]),
   auth: serverAuthSchema.default({}),
 });
 

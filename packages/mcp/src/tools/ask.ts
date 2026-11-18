@@ -1,4 +1,4 @@
-import { LLMTask } from '@cortex/core';
+import { LLMTask, normalizePrivacyLevel } from '@cortex/core';
 import type { QueryEngine, SQLiteStore } from '@cortex/graph';
 import type { Router } from '@cortex/llm';
 import { unifiedQueryPrompt } from '@cortex/llm';
@@ -74,7 +74,10 @@ export async function handleCortexAsk(
       entityMap.set(e.id, e);
     }
   }
-  const mergedEntities = Array.from(entityMap.values());
+  // The FTS results bypass assembleContext's privacy filter, so run the merged
+  // set through it: restricted entities are dropped, sensitive ones redacted,
+  // before anything reaches the cloud prompt or the MCP client.
+  const mergedEntities = await queryEngine.filterByPrivacy(Array.from(entityMap.values()));
   const mergedEntityIds = mergedEntities.map((e) => e.id);
 
   // Fetch relationships for all matched entities
@@ -85,14 +88,21 @@ export async function handleCortexAsk(
   const relevantContradictions = allContradictions.filter(
     (c) => entityIdSet.has(c.entityIds[0]) || entityIdSet.has(c.entityIds[1]),
   );
+  const projectLevel = new Map(projects.map((p) => [p.id, normalizePrivacyLevel(p.privacyLevel)]));
+  const isRestricted = (projectId: string | undefined): boolean =>
+    !projectId || (projectLevel.get(projectId) ?? 'restricted') === 'restricted';
+  const visibleProjects = projects.filter((p) => !isRestricted(p.id));
 
   // Resolve contradiction entity names
-  const contradictionEntries = await Promise.all(
+  const resolvedContradictions = await Promise.all(
     relevantContradictions.map(async (c) => {
       const [entityA, entityB] = await Promise.all([
         store.getEntity(c.entityIds[0]).catch(() => null),
         store.getEntity(c.entityIds[1]).catch(() => null),
       ]);
+      // The other side of a contradiction may live in a restricted project; its
+      // name and the LLM-written description would both disclose it.
+      if (isRestricted(entityA?.projectId) || isRestricted(entityB?.projectId)) return null;
       return {
         id: c.id,
         severity: c.severity,
@@ -103,6 +113,9 @@ export async function handleCortexAsk(
         ] as [string, string],
       };
     }),
+  );
+  const contradictionEntries = resolvedContradictions.filter(
+    (c): c is NonNullable<typeof c> => c !== null,
   );
 
   // Build entity results with relationships
@@ -138,8 +151,8 @@ export async function handleCortexAsk(
   // Build graph summary
   const graphSummary = [
     `${graphStats.entityCount} entities, ${graphStats.relationshipCount} relationships, ${graphStats.fileCount} files indexed`,
-    projects.length > 0
-      ? `Projects: ${projects.map((p) => `${p.name} (${p.rootPath})`).join(', ')}`
+    visibleProjects.length > 0
+      ? `Projects: ${visibleProjects.map((p) => `${p.name} (${p.rootPath})`).join(', ')}`
       : 'No projects configured.',
   ].filter(Boolean).join('\n');
 

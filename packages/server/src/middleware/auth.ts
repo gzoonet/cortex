@@ -10,6 +10,11 @@ function isLocalhost(host: string): boolean {
   return LOCALHOST_HOSTS.has(host);
 }
 
+/** Auth is required if explicitly enabled OR if the server binds to a non-localhost address. */
+export function isAuthRequired(config: CortexConfig, host: string): boolean {
+  return config.server.auth.enabled || !isLocalhost(host);
+}
+
 function safeEqual(a: string, b: string): boolean {
   const bufA = Buffer.from(a, 'utf-8');
   const bufB = Buffer.from(b, 'utf-8');
@@ -26,14 +31,9 @@ export function createAuthMiddleware(
   options: AuthMiddlewareOptions,
 ): (req: Request, res: Response, next: NextFunction) => void {
   const { config, host } = options;
-  const authEnabled = config.server.auth.enabled;
   const token = config.server.auth.token;
-  const isLocal = isLocalhost(host);
 
-  // Auth required if explicitly enabled OR if binding to non-localhost
-  const authRequired = authEnabled || !isLocal;
-
-  if (!authRequired) {
+  if (!isAuthRequired(config, host)) {
     return (_req, _res, next) => next();
   }
 
@@ -108,12 +108,9 @@ export function validateWsToken(
   url: string | undefined,
   authHeader?: string | string[],
 ): boolean {
-  const authEnabled = config.server.auth.enabled;
   const token = config.server.auth.token;
-  const isLocal = isLocalhost(host);
-  const authRequired = authEnabled || !isLocal;
 
-  if (!authRequired) return true;
+  if (!isAuthRequired(config, host)) return true;
   if (!token) return false;
 
   const headerToken = extractBearerToken(authHeader);

@@ -15,6 +15,7 @@ import { createContradictionRoutes } from './routes/contradictions.js';
 import { createStatusRoutes } from './routes/status.js';
 import { createEventRelay } from './ws/event-relay.js';
 import { createAuthMiddleware, validateWsToken } from './middleware/auth.js';
+import { createRequestGuard } from './middleware/request-guard.js';
 
 const logger = createLogger('server');
 
@@ -80,8 +81,15 @@ export async function startServer(options: ServerOptions): Promise<void> {
     // Non-fatal — continue starting server
   }
 
-  // Trust reverse proxy (nginx) — required for correct IP detection and rate limiting
-  app.set('trust proxy', 1);
+  // Honor X-Forwarded-For only from a proxy on this machine (e.g. nginx on loopback).
+  // Trusting it unconditionally lets direct remote clients spoof their IP and
+  // sidestep the per-IP rate limit on LLM-backed endpoints.
+  app.set('trust proxy', 'loopback');
+
+  // Host-header allowlist (DNS rebinding protection) for the unauthenticated mode.
+  // Runs before everything else, including the static dashboard.
+  const guard = createRequestGuard(config, host);
+  app.use(guard.httpMiddleware);
 
   // Middleware — CORS. Allow only the explicitly configured origins (e.g. the
   // Vite dev server). The dashboard is served same-origin with the API, so it

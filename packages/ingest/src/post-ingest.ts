@@ -2,7 +2,10 @@ import {
   eventBus,
   createLogger,
   LLMTask,
+  normalizePrivacyLevel,
+  stricterPrivacyLevel,
   type Entity,
+  type PrivacyLevel,
 } from '@cortex/core';
 import {
   mergeDetectionPrompt,
@@ -95,7 +98,10 @@ export async function runMergeDetection(
 /**
  * Run P4 contradiction detection for each newly stored entity against existing
  * graph entities of the same type. Routes to cloud (Haiku) by default.
- * Skipped for restricted projects. Forced local for sensitive.
+ * Privacy is decided per pair, as the stricter of the two entities' projects:
+ * a restricted side skips the pair, a sensitive side forces the local provider.
+ * Candidates come from a cross-project search, so checking only the source
+ * project would leak restricted/sensitive candidates into cloud prompts.
  *
  * Cost controls:
  * - contradictedFilePairs: skip LLM call once a contradiction is found for a file pair
@@ -118,11 +124,17 @@ export async function runContradictionDetection(
     return;
   }
 
-  // Standard privacy: no forceProvider — task routing config (contradiction_detection) decides
-  // Sensitive: force local for privacy
-  const privacyForce = privacyLevel === 'sensitive'
-    ? { forceProvider: 'local' as const }
-    : {};
+  const sourceLevel = normalizePrivacyLevel(privacyLevel);
+  const projectLevels = new Map<string, PrivacyLevel>([[projectId, sourceLevel]]);
+  const levelFor = async (pid: string): Promise<PrivacyLevel> => {
+    const cached = projectLevels.get(pid);
+    if (cached) return cached;
+    // Missing project or lookup failure: fail closed.
+    const project = await store.getProject(pid).catch(() => null);
+    const level = normalizePrivacyLevel(project?.privacyLevel);
+    projectLevels.set(pid, level);
+    return level;
+  };
 
   // Once a contradiction is found for a file pair, skip remaining pairs from those files.
   // This prevents LLM calls for every entity pair after the first match.
@@ -150,6 +162,11 @@ export async function runContradictionDetection(
       const entityPairKey = [entity.id, candidate.id].sort().join('\0');
       if (checkedEntityPairs.has(entityPairKey)) continue;
       checkedEntityPairs.add(entityPairKey);
+
+      const pairLevel = stricterPrivacyLevel(sourceLevel, await levelFor(candidate.projectId));
+      if (pairLevel === 'restricted') continue;
+      // Standard: no forceProvider, task routing config (contradiction_detection) decides.
+      const privacyForce = pairLevel === 'sensitive' ? { forceProvider: 'local' as const } : {};
 
       try {
         const result = await router.completeStructured(

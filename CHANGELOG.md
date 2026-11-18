@@ -2,6 +2,23 @@
 
 All notable changes to GZOO Cortex will be documented in this file.
 
+## [Unreleased]
+
+### Security
+
+- **Dashboard server: DNS rebinding and cross-site WebSocket protection.** Without auth (the default localhost mode), the server now rejects requests whose `Host` is not a loopback name or listed in the new `server.allowedHosts`, and refuses WebSocket handshakes from foreign origins. Previously any web page could read the live event stream, and a rebinding domain could read the REST API.
+- **Restricted content no longer reaches cloud prompts via contradiction detection.** Candidates come from a cross-project search; privacy is now decided per pair, as the stricter of the two projects.
+- **MCP `cortex_ask` applies the privacy filter** to its full-text results and hides restricted projects from the graph summary and contradictions.
+- **MCP `ingest_file` redacts secrets** with the configured `privacy.secretPatterns` and honors `ingest.maxFileSize`. Pipelines built without patterns fall back to the defaults.
+- **Privacy levels fail closed.** Unknown stored values are treated as `restricted`; invalid values are rejected on project creation and by the MCP `add_project` tool.
+- **Sensitive entities** no longer send their `summary` to the cloud.
+- `X-Forwarded-For` is trusted only from a loopback proxy, so remote clients cannot bypass the per-IP rate limit.
+- `cortex serve` writes the generated auth token with `0600` permissions.
+
+### Dependencies
+
+- Patched `@hono/node-server` (2.1.x) and `vite` (8.3.8+). Restored `zod` 3.x, since the 4.x bump broke the config schema and conflicted with `openai@4`; plain `npm ci` works again.
+
 ## [0.8.1] - 2026-06-25
 
 ### Added

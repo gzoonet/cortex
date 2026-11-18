@@ -95,6 +95,7 @@
     "port": 3710,
     "host": "127.0.0.1",
     "cors": ["http://localhost:5173"],
+    "allowedHosts": [],
     "auth": {
       "enabled": false,
       "token": ""
@@ -138,6 +139,7 @@
 2. If `server.host` is not `127.0.0.1`, auth is automatically enforced (warning logged if `server.auth.enabled` is not explicitly set). A token is auto-generated and saved to `~/.cortex/.env` if none is configured.
 3. If `llm.maxContextTokens` > model's context window, auto-reduce with warning
 4. If `llm.mode` is `local-only` and budget > 0, info message (no error)
+5. Without auth (localhost bind, auth disabled), requests must use a loopback `Host` (`localhost`, `127.0.0.1`, `[::1]`) or a name in `server.allowedHosts`. Add your proxy's hostname there if a local reverse proxy forwards its own `Host` header. With auth enabled this check is skipped.
 
 ## Routing Mode → Task Provider Mapping
 
