@@ -209,6 +209,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
       const response = await this.client.embeddings.create({
         model: this.embeddingModel,
         input: texts,
+        // The SDK otherwise requests base64 and decodes it itself, which yields
+        // corrupt vectors from compatible servers that ignore encoding_format.
+        encoding_format: 'float',
       });
       // Sort by index so vectors line up with the input order, regardless of server ordering.
       return response.data

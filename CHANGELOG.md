@@ -17,7 +17,10 @@ All notable changes to GZOO Cortex will be documented in this file.
 
 ### Dependencies
 
-- Patched `@hono/node-server` (2.1.x) and `vite` (8.3.8+). Restored `zod` 3.x, since the 4.x bump broke the config schema and conflicted with `openai@4`; plain `npm ci` works again.
+- Patched `@hono/node-server` (2.1.x) and `vite` (8.3.8+).
+- Migrated to `zod` 4.6.7+ (GHSA-mrhx-c7xc-m3w5, memory exhaustion on oversized constrained collections; there is no patched 3.x). Nested config defaults now use `.prefault({})` so sub-object defaults still apply.
+- Upgraded `openai` to 6.x, the first line that accepts zod 4. Plain `npm ci` works again and `npm audit` is clean.
+- Embeddings now request `encoding_format: "float"`, so OpenAI-compatible servers that ignore the base64 default no longer return corrupt vectors.
 
 ## [0.8.1] - 2026-06-25
 

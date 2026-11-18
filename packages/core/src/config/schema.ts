@@ -59,7 +59,7 @@ export const llmCloudSchema = z.object({
   models: z.object({
     primary: z.string().default('claude-sonnet-4-5-20250929'),
     fast: z.string().default('claude-haiku-4-5-20251001'),
-  }).default({}),
+  }).prefault({}),
   timeoutMs: z.number().positive().default(60_000),
   maxRetries: z.number().nonnegative().default(3),
   promptCaching: z.boolean().default(true),
@@ -94,16 +94,16 @@ export const llmConfigSchema = z.object({
     proactive: 0.5,
   }),
   maxContextTokens: z.number().positive().default(50_000),
-  cache: llmCacheSchema.default({}),
-  budget: llmBudgetSchema.default({}),
-  local: llmLocalSchema.default({}),
-  cloud: llmCloudSchema.default({}),
+  cache: llmCacheSchema.prefault({}),
+  budget: llmBudgetSchema.prefault({}),
+  local: llmLocalSchema.prefault({}),
+  cloud: llmCloudSchema.prefault({}),
   embeddings: llmEmbeddingsSchema.optional(),
 });
 
 export const privacyConfigSchema = z.object({
   defaultLevel: z.enum(['standard', 'sensitive', 'restricted']).default('standard'),
-  directoryOverrides: z.record(z.string(), z.enum(['standard', 'sensitive', 'restricted'])).default({}),
+  directoryOverrides: z.record(z.string(), z.enum(['standard', 'sensitive', 'restricted'])).prefault({}),
   autoClassify: z.boolean().default(true),
   logTransmissions: z.boolean().default(true),
   showTransmissionIndicator: z.boolean().default(true),
@@ -127,7 +127,7 @@ export const serverConfigSchema = z.object({
   cors: z.array(z.string()).default(['http://localhost:5173']),
   // Extra Host-header names accepted in unauthenticated mode (e.g. a reverse-proxy domain).
   allowedHosts: z.array(z.string()).default([]),
-  auth: serverAuthSchema.default({}),
+  auth: serverAuthSchema.prefault({}),
 });
 
 export const loggingConfigSchema = z.object({
@@ -142,12 +142,12 @@ export const loggingConfigSchema = z.object({
 export const cortexConfigSchema = z.object({
   $schema: z.string().optional(),
   version: z.string().default('1.0'),
-  ingest: ingestConfigSchema.default({}),
-  graph: graphConfigSchema.default({}),
-  llm: llmConfigSchema.default({}),
-  privacy: privacyConfigSchema.default({}),
-  server: serverConfigSchema.default({}),
-  logging: loggingConfigSchema.default({}),
+  ingest: ingestConfigSchema.prefault({}),
+  graph: graphConfigSchema.prefault({}),
+  llm: llmConfigSchema.prefault({}),
+  privacy: privacyConfigSchema.prefault({}),
+  server: serverConfigSchema.prefault({}),
+  logging: loggingConfigSchema.prefault({}),
 });
 
 export type CortexConfigInput = z.input<typeof cortexConfigSchema>;
